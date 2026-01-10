@@ -17,7 +17,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         'name' => trim(isset($_POST['name']) ? $_POST['name'] : ''),
         'email' => trim(isset($_POST['email']) ? $_POST['email'] : ''),
         'phone' => trim(isset($_POST['phone']) ? $_POST['phone'] : ''),
-        'is_active' => isset($_POST['is_active']) ? 1 : 0
+        'is_active' => isset($_POST['is_active']) ? 1 : 0,
+        'role' => isset($_POST['role']) && in_array($_POST['role'], User::$validRoles) ? $_POST['role'] : User::ROLE_USER
     ];
 
     if (empty($data['username']) || empty($data['password'])) {
@@ -33,7 +34,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $newUserId = $id;
                 $message = 'User created successfully! You can now assign companies and devices.';
                 $messageType = 'success';
-                $data = ['username' => '', 'name' => '', 'email' => '', 'phone' => '', 'is_active' => 1];
+                $data = ['username' => '', 'name' => '', 'email' => '', 'phone' => '', 'is_active' => 1, 'role' => User::ROLE_USER];
             } else {
                 $message = 'Failed to create user.';
                 $messageType = 'danger';
@@ -53,7 +54,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         'name' => '',
         'email' => '',
         'phone' => '',
-        'is_active' => 1
+        'is_active' => 1,
+        'role' => User::ROLE_USER
     ];
 }
 
@@ -79,17 +81,27 @@ include 'includes/header.php';
 
                 <form method="POST" action="">
                     <div class="row">
-                        <div class="col-md-6 mb-3">
+                        <div class="col-md-4 mb-3">
                             <label for="username" class="form-label">Username <span class="text-danger">*</span></label>
                             <input type="text" class="form-control" id="username" name="username"
                                    value="<?php echo htmlspecialchars($data['username']); ?>" required
                                    placeholder="e.g., john.doe">
                         </div>
 
-                        <div class="col-md-6 mb-3">
+                        <div class="col-md-4 mb-3">
                             <label for="password" class="form-label">Password <span class="text-danger">*</span></label>
                             <input type="password" class="form-control" id="password" name="password" required
                                    placeholder="Min 6 characters">
+                        </div>
+
+                        <div class="col-md-4 mb-3">
+                            <label for="role" class="form-label">Role <span class="text-danger">*</span></label>
+                            <select class="form-select" id="role" name="role" required>
+                                <option value="user" <?php echo ($data['role'] === 'user') ? 'selected' : ''; ?>>User</option>
+                                <option value="admin" <?php echo ($data['role'] === 'admin') ? 'selected' : ''; ?>>Admin</option>
+                                <option value="viewer" <?php echo ($data['role'] === 'viewer') ? 'selected' : ''; ?>>Viewer</option>
+                            </select>
+                            <div class="form-text">Admin: Full access | User: Edit access | Viewer: Read-only</div>
                         </div>
                     </div>
 
