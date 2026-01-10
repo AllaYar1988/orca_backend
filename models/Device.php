@@ -10,20 +10,84 @@ class Device {
     }
 
     public function create($data) {
-        $sql = "INSERT INTO {$this->table} (company_id, name, serial_number, description, device_type, is_active)
-                VALUES (:company_id, :name, :serial_number, :description, :device_type, :is_active)";
+        // Generate API key if not provided
+        $apiKey = isset($data['api_key']) ? $data['api_key'] : $this->generateApiKey();
+
+        $sql = "INSERT INTO {$this->table} (company_id, name, serial_number, api_key, description, device_type, is_active)
+                VALUES (:company_id, :name, :serial_number, :api_key, :description, :device_type, :is_active)";
 
         $stmt = $this->db->prepare($sql);
         $stmt->execute([
             ':company_id' => $data['company_id'],
             ':name' => $data['name'],
             ':serial_number' => $data['serial_number'],
+            ':api_key' => $apiKey,
             ':description' => isset($data['description']) ? $data['description'] : null,
             ':device_type' => isset($data['device_type']) ? $data['device_type'] : null,
             ':is_active' => isset($data['is_active']) ? $data['is_active'] : 1
         ]);
 
         return $this->db->lastInsertId();
+    }
+
+    /**
+     * Generate a random API key (64 hex chars = 32 bytes)
+     */
+    public function generateApiKey() {
+        return bin2hex(random_bytes(32));
+    }
+
+    /**
+     * Regenerate API key for a device
+     */
+    public function regenerateApiKey($id) {
+        $newKey = $this->generateApiKey();
+        $sql = "UPDATE {$this->table} SET api_key = :api_key WHERE id = :id";
+        $stmt = $this->db->prepare($sql);
+        $stmt->execute([':api_key' => $newKey, ':id' => $id]);
+        return $newKey;
+    }
+
+    /**
+     * Verify HMAC signature for device authentication
+     * Device sends: signature = SHA256(api_key + timestamp)
+     * We verify by computing the same hash with stored api_key
+     *
+     * @param string $serialNumber Device serial number
+     * @param int $timestamp Unix timestamp from request
+     * @param string $signature HMAC signature from device
+     * @param int $toleranceSeconds Allow timestamp within this window (default 5 min)
+     * @return array ['valid' => bool, 'device' => array|null, 'error' => string|null]
+     */
+    public function verifyHmac($serialNumber, $timestamp, $signature, $toleranceSeconds = 300) {
+        $device = $this->getBySerialNumber($serialNumber);
+
+        if (!$device) {
+            return ['valid' => false, 'device' => null, 'error' => 'Device not found'];
+        }
+
+        if (!$device['is_active']) {
+            return ['valid' => false, 'device' => $device, 'error' => 'Device is inactive'];
+        }
+
+        if (!$device['company_active']) {
+            return ['valid' => false, 'device' => $device, 'error' => 'Company is inactive'];
+        }
+
+        // Check timestamp is within tolerance (prevents replay attacks)
+        $now = time();
+        if (abs($now - $timestamp) > $toleranceSeconds) {
+            return ['valid' => false, 'device' => $device, 'error' => 'Timestamp expired'];
+        }
+
+        // Compute expected signature: SHA256(api_key + timestamp)
+        $expectedSignature = hash('sha256', $device['api_key'] . $timestamp);
+
+        if (!hash_equals($expectedSignature, $signature)) {
+            return ['valid' => false, 'device' => $device, 'error' => 'Invalid signature'];
+        }
+
+        return ['valid' => true, 'device' => $device, 'error' => null];
     }
 
     public function getById($id) {
@@ -86,7 +150,7 @@ class Device {
         $fields = [];
         $params = [':id' => $id];
 
-        foreach (['company_id', 'name', 'serial_number', 'description', 'device_type', 'is_active'] as $field) {
+        foreach (['company_id', 'name', 'serial_number', 'api_key', 'description', 'device_type', 'is_active'] as $field) {
             if (array_key_exists($field, $data)) {
                 $fields[] = "$field = :$field";
                 $params[":$field"] = $data[$field];

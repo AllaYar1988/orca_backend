@@ -1,6 +1,6 @@
 <?php
 /**
- * API: Send Batch Log Data (Device -> Server)
+ * API: Send Batch Log Data (Device -> Server) with HMAC Authentication
  *
  * Endpoint: POST /api/send_logs.php
  * Content-Type: application/json
@@ -8,7 +8,8 @@
  * Request Body:
  * {
  *   "serial_number": "DEVICE-001",
- *   "timestamp": "2026-01-10 09:45:00",  // optional, shared timestamp for all
+ *   "timestamp": 1736505600,           // Unix timestamp (required for auth)
+ *   "signature": "abc123...",          // SHA256(api_key + timestamp)
  *   "logs": [
  *     { "key": "temperature", "value": "25.5" },
  *     { "key": "humidity", "value": "60" },
@@ -16,6 +17,11 @@
  *     { "key": "co2", "value": "450" }
  *   ]
  * }
+ *
+ * STM32F407 Example (using mbedTLS or hardware SHA256):
+ *   char message[128];
+ *   sprintf(message, "%s%ld", api_key, timestamp);
+ *   sha256(message, strlen(message), signature_hex);
  */
 
 header('Content-Type: application/json');
@@ -46,6 +52,7 @@ if (json_last_error() !== JSON_ERROR_NONE) {
     exit;
 }
 
+// Validate required fields
 if (empty($data['serial_number'])) {
     http_response_code(400);
     echo json_encode(['success' => false, 'error' => 'Serial number is required']);
@@ -58,29 +65,31 @@ if (empty($data['logs']) || !is_array($data['logs'])) {
     exit;
 }
 
+if (empty($data['timestamp']) || empty($data['signature'])) {
+    http_response_code(400);
+    echo json_encode(['success' => false, 'error' => 'Timestamp and signature are required']);
+    exit;
+}
+
+// Verify HMAC authentication
 $deviceModel = new Device();
-$device = $deviceModel->getBySerialNumber($data['serial_number']);
+$authResult = $deviceModel->verifyHmac(
+    $data['serial_number'],
+    (int)$data['timestamp'],
+    $data['signature']
+);
 
-if (!$device) {
-    http_response_code(404);
-    echo json_encode(['success' => false, 'error' => 'Device not found']);
+if (!$authResult['valid']) {
+    http_response_code(401);
+    echo json_encode(['success' => false, 'error' => $authResult['error']]);
     exit;
 }
 
-if (!$device['is_active']) {
-    http_response_code(403);
-    echo json_encode(['success' => false, 'error' => 'Device is inactive']);
-    exit;
-}
+$device = $authResult['device'];
 
-if (!$device['company_active']) {
-    http_response_code(403);
-    echo json_encode(['success' => false, 'error' => 'Company is inactive']);
-    exit;
-}
-
+// Save logs
 $logModel = new DeviceLog();
-$timestamp = $data['timestamp'] ?? date('Y-m-d H:i:s');
+$logTimestamp = date('Y-m-d H:i:s', (int)$data['timestamp']);
 $ipAddress = $_SERVER['REMOTE_ADDR'] ?? null;
 
 $savedCount = 0;
@@ -98,7 +107,7 @@ foreach ($data['logs'] as $log) {
         'log_value' => $log['value'] ?? null,
         'log_data' => $log['data'] ?? null,
         'ip_address' => $ipAddress,
-        'logged_at' => $log['timestamp'] ?? $timestamp
+        'logged_at' => $log['timestamp'] ?? $logTimestamp
     ];
 
     $logId = $logModel->create($logData);
