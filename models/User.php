@@ -9,10 +9,23 @@ class User {
         $this->db = Database::getInstance()->getConnection();
     }
 
+    // Role constants
+    const ROLE_ADMIN = 'admin';
+    const ROLE_USER = 'user';
+    const ROLE_VIEWER = 'viewer';
+
+    // Valid roles array for validation
+    public static $validRoles = ['admin', 'user', 'viewer'];
+
     public function create($data) {
+        // Validate role if provided
+        $role = isset($data['role']) && in_array($data['role'], self::$validRoles)
+            ? $data['role']
+            : self::ROLE_USER;
+
         // Create user (companies are assigned via user_companies table)
-        $sql = "INSERT INTO {$this->table} (username, password_hash, name, email, phone, is_active)
-                VALUES (:username, :password_hash, :name, :email, :phone, :is_active)";
+        $sql = "INSERT INTO {$this->table} (username, password_hash, name, email, phone, is_active, role)
+                VALUES (:username, :password_hash, :name, :email, :phone, :is_active, :role)";
 
         $stmt = $this->db->prepare($sql);
         $stmt->execute([
@@ -21,7 +34,8 @@ class User {
             ':name' => isset($data['name']) ? $data['name'] : null,
             ':email' => isset($data['email']) ? $data['email'] : null,
             ':phone' => isset($data['phone']) ? $data['phone'] : null,
-            ':is_active' => isset($data['is_active']) ? $data['is_active'] : 1
+            ':is_active' => isset($data['is_active']) ? $data['is_active'] : 1,
+            ':role' => $role
         ]);
 
         $userId = $this->db->lastInsertId();
@@ -105,6 +119,12 @@ class User {
                 $fields[] = "$field = :$field";
                 $params[":$field"] = $data[$field];
             }
+        }
+
+        // Handle role update with validation
+        if (array_key_exists('role', $data) && in_array($data['role'], self::$validRoles)) {
+            $fields[] = "role = :role";
+            $params[':role'] = $data['role'];
         }
 
         // Handle password separately
@@ -327,7 +347,7 @@ class User {
             return false;
         }
 
-        $sql = "SELECT t.*, u.id as user_id, u.username, u.name, u.email, u.is_active
+        $sql = "SELECT t.*, u.id as user_id, u.username, u.name, u.email, u.is_active, u.role
                 FROM user_tokens t
                 INNER JOIN users u ON t.user_id = u.id
                 WHERE t.token = :token
@@ -413,5 +433,58 @@ class User {
             return $this->getById($tokenData['user_id']);
         }
         return false;
+    }
+
+    // ==========================================
+    // Role-based Permission Methods
+    // ==========================================
+
+    /**
+     * Check if user has admin role
+     * @param int $userId
+     * @return bool
+     */
+    public function isAdmin($userId) {
+        $user = $this->getById($userId);
+        return $user && $user['role'] === self::ROLE_ADMIN;
+    }
+
+    /**
+     * Check if user has viewer role (read-only)
+     * @param int $userId
+     * @return bool
+     */
+    public function isViewer($userId) {
+        $user = $this->getById($userId);
+        return $user && $user['role'] === self::ROLE_VIEWER;
+    }
+
+    /**
+     * Check if user can edit (admin or user, not viewer)
+     * @param int $userId
+     * @return bool
+     */
+    public function canEdit($userId) {
+        $user = $this->getById($userId);
+        return $user && in_array($user['role'], [self::ROLE_ADMIN, self::ROLE_USER]);
+    }
+
+    /**
+     * Check if user can manage (admin only)
+     * @param int $userId
+     * @return bool
+     */
+    public function canManage($userId) {
+        return $this->isAdmin($userId);
+    }
+
+    /**
+     * Get user's role
+     * @param int $userId
+     * @return string|null
+     */
+    public function getRole($userId) {
+        $user = $this->getById($userId);
+        return $user ? $user['role'] : null;
     }
 }
