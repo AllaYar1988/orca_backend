@@ -42,6 +42,7 @@ if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
 
 require_once __DIR__ . '/../models/Device.php';
 require_once __DIR__ . '/../models/DeviceLog.php';
+require_once __DIR__ . '/../models/SensorConfig.php';
 
 $input = file_get_contents('php://input');
 $data = json_decode($input, true);
@@ -89,22 +90,49 @@ $device = $authResult['device'];
 
 // Save logs
 $logModel = new DeviceLog();
+$sensorConfigModel = new SensorConfig();
 $logTimestamp = date('Y-m-d H:i:s', (int)$data['timestamp']);
 $ipAddress = $_SERVER['REMOTE_ADDR'] ?? null;
 
 $savedCount = 0;
 $logIds = [];
+$alarms = [];
 
 foreach ($data['logs'] as $log) {
     if (empty($log['key'])) {
         continue;
     }
 
+    $logKey = $log['key'];
+    $rawValue = $log['value'] ?? null;
+
+    // Get sensor config for this log key
+    $sensorConfig = $sensorConfigModel->getConfig($device['id'], $logKey);
+
+    // Apply zero-span conversion if sensor is 4-20mA type
+    $convertedValue = $rawValue;
+    if ($sensorConfig && $sensorConfig['data_type'] === '4-20' && $rawValue !== null) {
+        $convertedValue = $sensorConfigModel->convertValue($rawValue, $sensorConfig);
+    }
+
+    // Check for alarms
+    if ($sensorConfig && $convertedValue !== null) {
+        $alarmResult = $sensorConfigModel->checkAlarm($convertedValue, $sensorConfig);
+        if ($alarmResult['alarm']) {
+            $alarms[] = [
+                'key' => $logKey,
+                'type' => $alarmResult['type'],
+                'value' => $convertedValue,
+                'message' => $alarmResult['message']
+            ];
+        }
+    }
+
     $logData = [
         'device_id' => $device['id'],
         'serial_number' => $data['serial_number'],
-        'log_key' => $log['key'],
-        'log_value' => $log['value'] ?? null,
+        'log_key' => $logKey,
+        'log_value' => $convertedValue,  // Store converted value
         'log_data' => $log['data'] ?? null,
         'ip_address' => $ipAddress,
         'logged_at' => $log['timestamp'] ?? $logTimestamp
@@ -121,13 +149,20 @@ foreach ($data['logs'] as $log) {
 if ($savedCount > 0) {
     $deviceModel->updateLastSeen($device['id'], (int)$data['timestamp']);
 
-    http_response_code(201);
-    echo json_encode([
+    $response = [
         'success' => true,
         'message' => "Saved $savedCount logs",
         'count' => $savedCount,
         'log_ids' => $logIds
-    ]);
+    ];
+
+    // Include alarms if any
+    if (!empty($alarms)) {
+        $response['alarms'] = $alarms;
+    }
+
+    http_response_code(201);
+    echo json_encode($response);
 } else {
     http_response_code(500);
     echo json_encode(['success' => false, 'error' => 'Failed to save any logs']);
