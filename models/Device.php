@@ -168,10 +168,11 @@ class Device {
 
     public function updateLastSeen($id, $timestamp = null) {
         if ($timestamp) {
-            // Use device timestamp (Unix timestamp -> MySQL datetime in UTC)
-            $sql = "UPDATE {$this->table} SET last_seen_at = FROM_UNIXTIME(:ts) WHERE id = :id";
+            // Convert Unix timestamp to UTC datetime string in PHP (avoids MySQL timezone issues)
+            $utcDatetime = gmdate('Y-m-d H:i:s', $timestamp);
+            $sql = "UPDATE {$this->table} SET last_seen_at = :dt WHERE id = :id";
             $stmt = $this->db->prepare($sql);
-            return $stmt->execute([':ts' => $timestamp, ':id' => $id]);
+            return $stmt->execute([':dt' => $utcDatetime, ':id' => $id]);
         } else {
             $sql = "UPDATE {$this->table} SET last_seen_at = UTC_TIMESTAMP() WHERE id = :id";
             $stmt = $this->db->prepare($sql);
