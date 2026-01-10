@@ -81,7 +81,17 @@ if ($testToken) {
     }
 }
 
-// Test 4: Create a new test token for user 1 and verify it works
+// Test 4: Test INTERVAL SQL
+try {
+    $stmt = $db->query("SELECT NOW() as now_time, NOW() + INTERVAL 24 HOUR as plus_24");
+    $row = $stmt->fetch();
+    $results['sql_now'] = $row['now_time'];
+    $results['sql_now_plus_24'] = $row['plus_24'];
+} catch (Exception $e) {
+    $results['sql_interval_error'] = $e->getMessage();
+}
+
+// Test 5: Create a new test token for user 1 and verify it works
 try {
     $testUser = $userModel->getByUsername('myco');
     if ($testUser) {
@@ -96,11 +106,17 @@ try {
         $validation = $userModel->validateToken($newToken);
         $results['new_token_validates'] = $validation ? true : false;
 
-        // Check it's in the database
+        // Check it's in the database with full details
         $stmt = $db->prepare("SELECT * FROM user_tokens WHERE token = :token");
         $stmt->execute([':token' => $newToken]);
-        $found = $stmt->fetch();
+        $found = $stmt->fetch(PDO::FETCH_ASSOC);
         $results['new_token_in_db'] = $found ? true : false;
+        if ($found) {
+            $results['new_token_details'] = [
+                'created_at' => $found['created_at'],
+                'expires_at' => $found['expires_at']
+            ];
+        }
     } else {
         $results['test_user_found'] = false;
     }
