@@ -301,16 +301,14 @@ class User {
         // Generate secure random token
         $token = bin2hex(random_bytes(32));
 
-        // Calculate expiry time
-        $expiresAt = date('Y-m-d H:i:s', strtotime("+{$expiryHours} hours"));
-
+        // Use MySQL's NOW() + INTERVAL to avoid PHP/MySQL timezone mismatch
         $sql = "INSERT INTO user_tokens (user_id, token, expires_at, ip_address, user_agent)
-                VALUES (:user_id, :token, :expires_at, :ip_address, :user_agent)";
+                VALUES (:user_id, :token, NOW() + INTERVAL :hours HOUR, :ip_address, :user_agent)";
         $stmt = $this->db->prepare($sql);
         $stmt->execute([
             ':user_id' => $userId,
             ':token' => $token,
-            ':expires_at' => $expiresAt,
+            ':hours' => $expiryHours,
             ':ip_address' => $ipAddress,
             ':user_agent' => $userAgent
         ]);
