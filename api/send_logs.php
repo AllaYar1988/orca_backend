@@ -119,7 +119,7 @@ foreach ($data['logs'] as $log) {
 }
 
 if ($savedCount > 0) {
-    $deviceModel->updateLastSeen($device['id']);
+    $deviceModel->updateLastSeen($device['id'], (int)$data['timestamp']);
 
     http_response_code(201);
     echo json_encode([

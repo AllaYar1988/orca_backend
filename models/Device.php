@@ -166,10 +166,17 @@ class Device {
         return $stmt->execute($params);
     }
 
-    public function updateLastSeen($id) {
-        $sql = "UPDATE {$this->table} SET last_seen_at = CURRENT_TIMESTAMP WHERE id = :id";
-        $stmt = $this->db->prepare($sql);
-        return $stmt->execute([':id' => $id]);
+    public function updateLastSeen($id, $timestamp = null) {
+        if ($timestamp) {
+            // Use device timestamp (Unix timestamp -> MySQL datetime in UTC)
+            $sql = "UPDATE {$this->table} SET last_seen_at = FROM_UNIXTIME(:ts) WHERE id = :id";
+            $stmt = $this->db->prepare($sql);
+            return $stmt->execute([':ts' => $timestamp, ':id' => $id]);
+        } else {
+            $sql = "UPDATE {$this->table} SET last_seen_at = UTC_TIMESTAMP() WHERE id = :id";
+            $stmt = $this->db->prepare($sql);
+            return $stmt->execute([':id' => $id]);
+        }
     }
 
     public function delete($id) {
