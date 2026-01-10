@@ -67,7 +67,23 @@ if (!$userModel->hasAccessToDevice($authUser['id'], $deviceId)) {
     exit;
 }
 
+// Check for sensor-level restrictions
+$allowedSensors = $userModel->getAllowedSensors($authUser['id'], $deviceId);
+$hasSensorRestrictions = !empty($allowedSensors);
+
 $db = Database::getInstance()->getConnection();
+
+// Build sensor restriction clause if needed
+$sensorClause = '';
+$sensorParams = [];
+if ($hasSensorRestrictions) {
+    $placeholders = [];
+    foreach ($allowedSensors as $i => $sensor) {
+        $placeholders[] = ":sensor_$i";
+        $sensorParams[":sensor_$i"] = $sensor;
+    }
+    $sensorClause = " AND log_key IN (" . implode(',', $placeholders) . ")";
+}
 
 // Build query based on whether date range is provided
 if ($from && $to) {
@@ -79,46 +95,38 @@ if ($from && $to) {
     $toDate = preg_replace('/(\.\d+)?(Z|[+-]\d{2}:\d{2})?$/', '', $toDate);
 
     // Get total count for date range
-    $stmt = $db->prepare("
-        SELECT COUNT(*) FROM device_logs
-        WHERE device_id = :device_id
-        AND logged_at >= :from_date
-        AND logged_at <= :to_date
-    ");
-    $stmt->execute([
+    $countSql = "SELECT COUNT(*) FROM device_logs WHERE device_id = :device_id AND logged_at >= :from_date AND logged_at <= :to_date" . $sensorClause;
+    $stmt = $db->prepare($countSql);
+    $stmt->execute(array_merge([
         ':device_id' => $deviceId,
         ':from_date' => $fromDate,
         ':to_date' => $toDate
-    ]);
+    ], $sensorParams));
     $total = (int)$stmt->fetchColumn();
 
     // Get logs within date range (ordered ascending for time series)
+    $selectSql = "SELECT * FROM device_logs WHERE device_id = :device_id AND logged_at >= :from_date AND logged_at <= :to_date" . $sensorClause . " ORDER BY logged_at ASC";
+
     // If limit is provided, use pagination; otherwise return all
     if (isset($_GET['limit'])) {
-        $stmt = $db->prepare("
-            SELECT * FROM device_logs
-            WHERE device_id = :device_id
-            AND logged_at >= :from_date
-            AND logged_at <= :to_date
-            ORDER BY logged_at ASC
-            LIMIT :limit OFFSET :offset
-        ");
+        $selectSql .= " LIMIT :limit OFFSET :offset";
+        $stmt = $db->prepare($selectSql);
         $stmt->bindValue(':device_id', $deviceId, PDO::PARAM_INT);
         $stmt->bindValue(':from_date', $fromDate, PDO::PARAM_STR);
         $stmt->bindValue(':to_date', $toDate, PDO::PARAM_STR);
+        foreach ($sensorParams as $key => $value) {
+            $stmt->bindValue($key, $value, PDO::PARAM_STR);
+        }
         $stmt->bindValue(':limit', $limit, PDO::PARAM_INT);
         $stmt->bindValue(':offset', $offset, PDO::PARAM_INT);
     } else {
-        $stmt = $db->prepare("
-            SELECT * FROM device_logs
-            WHERE device_id = :device_id
-            AND logged_at >= :from_date
-            AND logged_at <= :to_date
-            ORDER BY logged_at ASC
-        ");
+        $stmt = $db->prepare($selectSql);
         $stmt->bindValue(':device_id', $deviceId, PDO::PARAM_INT);
         $stmt->bindValue(':from_date', $fromDate, PDO::PARAM_STR);
         $stmt->bindValue(':to_date', $toDate, PDO::PARAM_STR);
+        foreach ($sensorParams as $key => $value) {
+            $stmt->bindValue($key, $value, PDO::PARAM_STR);
+        }
     }
     $stmt->execute();
     $logs = $stmt->fetchAll();
@@ -142,18 +150,18 @@ if ($from && $to) {
 } else {
     // Original behavior with limit/offset
     // Get total count
-    $stmt = $db->prepare("SELECT COUNT(*) FROM device_logs WHERE device_id = :device_id");
-    $stmt->execute([':device_id' => $deviceId]);
+    $countSql = "SELECT COUNT(*) FROM device_logs WHERE device_id = :device_id" . $sensorClause;
+    $stmt = $db->prepare($countSql);
+    $stmt->execute(array_merge([':device_id' => $deviceId], $sensorParams));
     $total = (int)$stmt->fetchColumn();
 
     // Get logs
-    $stmt = $db->prepare("
-        SELECT * FROM device_logs
-        WHERE device_id = :device_id
-        ORDER BY logged_at DESC
-        LIMIT :limit OFFSET :offset
-    ");
+    $selectSql = "SELECT * FROM device_logs WHERE device_id = :device_id" . $sensorClause . " ORDER BY logged_at DESC LIMIT :limit OFFSET :offset";
+    $stmt = $db->prepare($selectSql);
     $stmt->bindValue(':device_id', $deviceId, PDO::PARAM_INT);
+    foreach ($sensorParams as $key => $value) {
+        $stmt->bindValue($key, $value, PDO::PARAM_STR);
+    }
     $stmt->bindValue(':limit', $limit, PDO::PARAM_INT);
     $stmt->bindValue(':offset', $offset, PDO::PARAM_INT);
     $stmt->execute();
