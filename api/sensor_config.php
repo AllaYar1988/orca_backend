@@ -25,21 +25,35 @@
  * }
  */
 
+error_reporting(E_ALL);
+ini_set('display_errors', 0);
+
+set_exception_handler(function($e) {
+    http_response_code(500);
+    echo json_encode(['success' => false, 'error' => $e->getMessage()]);
+    exit;
+});
+
 header('Content-Type: application/json');
 header('Access-Control-Allow-Origin: *');
 header('Access-Control-Allow-Methods: GET, POST, DELETE, OPTIONS');
-header('Access-Control-Allow-Headers: Content-Type');
+header('Access-Control-Allow-Headers: Content-Type, Authorization');
 
 if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') {
     http_response_code(200);
     exit;
 }
 
+// Authenticate user via token
+require_once __DIR__ . '/auth_middleware.php';
+// $authUser is now available with user data
+
 require_once __DIR__ . '/../models/SensorConfig.php';
 require_once __DIR__ . '/../models/Device.php';
 
 $sensorConfigModel = new SensorConfig();
 $deviceModel = new Device();
+$userModel = new User();
 
 // GET - Retrieve configs
 if ($_SERVER['REQUEST_METHOD'] === 'GET') {
@@ -57,6 +71,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET') {
     if (!$device) {
         http_response_code(404);
         echo json_encode(['success' => false, 'error' => 'Device not found']);
+        exit;
+    }
+
+    // Verify user has access to this device
+    if (!$userModel->hasAccessToDevice($authUser['id'], $deviceId)) {
+        http_response_code(403);
+        echo json_encode(['success' => false, 'error' => 'Access denied to this device']);
         exit;
     }
 
@@ -134,6 +155,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         exit;
     }
 
+    // Verify user has access to this device
+    if (!$userModel->hasAccessToDevice($authUser['id'], $data['device_id'])) {
+        http_response_code(403);
+        echo json_encode(['success' => false, 'error' => 'Access denied to this device']);
+        exit;
+    }
+
     // Validate data_type
     if (!empty($data['data_type']) && !in_array($data['data_type'], ['4-20', 'real'])) {
         http_response_code(400);
@@ -166,6 +194,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'DELETE') {
     if (!$deviceId || !$logKey) {
         http_response_code(400);
         echo json_encode(['success' => false, 'error' => 'device_id and key are required']);
+        exit;
+    }
+
+    // Verify user has access to this device
+    if (!$userModel->hasAccessToDevice($authUser['id'], $deviceId)) {
+        http_response_code(403);
+        echo json_encode(['success' => false, 'error' => 'Access denied to this device']);
         exit;
     }
 
