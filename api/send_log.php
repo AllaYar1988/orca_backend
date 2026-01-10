@@ -32,9 +32,6 @@ if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
 
 require_once __DIR__ . '/../models/Device.php';
 require_once __DIR__ . '/../models/DeviceLog.php';
-require_once __DIR__ . '/../src/WebSocket/WebSocketNotifier.php';
-
-
 
 $input = file_get_contents('php://input');
 $data = json_decode($input, true);
@@ -88,10 +85,6 @@ $logId = $logModel->create($logData);
 
 if ($logId) {
     $deviceModel->updateLastSeen($device['id']);
-
-    // Broadcast to WebSocket clients
-    $logData['id'] = $logId;
-    WebSocketNotifier::broadcast((int)$device['id'], $logData);
 
     http_response_code(201);
     echo json_encode([
