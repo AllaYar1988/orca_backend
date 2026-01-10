@@ -227,14 +227,19 @@ include 'includes/header.php';
 
                     <div class="row">
                         <?php foreach ($company['devices'] as $device): ?>
+                        <?php $isAssigned = in_array($device['id'], $assignedDeviceIds); ?>
+                        <?php $hasSensorRestrictions = $isAssigned && $userModel->hasSensorRestrictions($id, $device['id']); ?>
                         <div class="col-md-6 mb-2">
                             <div class="form-check">
                                 <input class="form-check-input device-checkbox-<?php echo $company['id']; ?>" type="checkbox"
                                        name="devices[]" value="<?php echo $device['id']; ?>"
                                        id="device_<?php echo $device['id']; ?>"
-                                       <?php echo in_array($device['id'], $assignedDeviceIds) ? 'checked' : ''; ?>>
+                                       <?php echo $isAssigned ? 'checked' : ''; ?>>
                                 <label class="form-check-label" for="device_<?php echo $device['id']; ?>">
                                     <strong><?php echo htmlspecialchars($device['name']); ?></strong>
+                                    <?php if ($hasSensorRestrictions): ?>
+                                    <span class="badge bg-warning text-dark badge-sm">Sensor restricted</span>
+                                    <?php endif; ?>
                                     <br>
                                     <small class="text-muted">
                                         <code><?php echo htmlspecialchars($device['serial_number']); ?></code>
@@ -242,6 +247,12 @@ include 'includes/header.php';
                                         - <?php echo htmlspecialchars($device['device_type']); ?>
                                         <?php endif; ?>
                                     </small>
+                                    <?php if ($isAssigned): ?>
+                                    <br>
+                                    <a href="user_device_sensors.php?user_id=<?php echo $id; ?>&device_id=<?php echo $device['id']; ?>" class="btn btn-outline-secondary btn-sm mt-1">
+                                        <i class="bi bi-sliders me-1"></i>Manage Sensors
+                                    </a>
+                                    <?php endif; ?>
                                 </label>
                             </div>
                         </div>

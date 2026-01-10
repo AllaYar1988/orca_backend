@@ -487,4 +487,145 @@ class User {
         $user = $this->getById($userId);
         return $user ? $user['role'] : null;
     }
+
+    // ==========================================
+    // Sensor Access Methods
+    // ==========================================
+
+    /**
+     * Assign specific sensor access for a user on a device
+     * @param int $userId
+     * @param int $deviceId
+     * @param string $logKey - The sensor identifier (e.g., 'temperature')
+     * @return bool
+     */
+    public function assignSensor($userId, $deviceId, $logKey) {
+        $sql = "INSERT IGNORE INTO user_device_sensors (user_id, device_id, log_key) VALUES (:user_id, :device_id, :log_key)";
+        $stmt = $this->db->prepare($sql);
+        return $stmt->execute([':user_id' => $userId, ':device_id' => $deviceId, ':log_key' => $logKey]);
+    }
+
+    /**
+     * Remove specific sensor access for a user on a device
+     * @param int $userId
+     * @param int $deviceId
+     * @param string $logKey
+     * @return bool
+     */
+    public function removeSensor($userId, $deviceId, $logKey) {
+        $sql = "DELETE FROM user_device_sensors WHERE user_id = :user_id AND device_id = :device_id AND log_key = :log_key";
+        $stmt = $this->db->prepare($sql);
+        return $stmt->execute([':user_id' => $userId, ':device_id' => $deviceId, ':log_key' => $logKey]);
+    }
+
+    /**
+     * Remove all sensor restrictions for a user on a device (grants access to all sensors)
+     * @param int $userId
+     * @param int $deviceId
+     * @return bool
+     */
+    public function removeAllSensorRestrictions($userId, $deviceId) {
+        $sql = "DELETE FROM user_device_sensors WHERE user_id = :user_id AND device_id = :device_id";
+        $stmt = $this->db->prepare($sql);
+        return $stmt->execute([':user_id' => $userId, ':device_id' => $deviceId]);
+    }
+
+    /**
+     * Set sensor restrictions for a user on a device
+     * Pass empty array to remove all restrictions (grant access to all sensors)
+     * @param int $userId
+     * @param int $deviceId
+     * @param array $logKeys - Array of sensor log_keys to allow
+     * @return bool
+     */
+    public function setSensorAccess($userId, $deviceId, $logKeys) {
+        // Remove existing restrictions
+        $this->removeAllSensorRestrictions($userId, $deviceId);
+
+        // If empty array, user gets access to all sensors (no restrictions)
+        if (empty($logKeys)) {
+            return true;
+        }
+
+        // Add new restrictions
+        foreach ($logKeys as $logKey) {
+            $this->assignSensor($userId, $deviceId, $logKey);
+        }
+        return true;
+    }
+
+    /**
+     * Get allowed sensors for a user on a device
+     * Returns empty array if no restrictions (user can see all sensors)
+     * @param int $userId
+     * @param int $deviceId
+     * @return array - Array of log_keys, or empty if no restrictions
+     */
+    public function getAllowedSensors($userId, $deviceId) {
+        $sql = "SELECT log_key FROM user_device_sensors WHERE user_id = :user_id AND device_id = :device_id";
+        $stmt = $this->db->prepare($sql);
+        $stmt->execute([':user_id' => $userId, ':device_id' => $deviceId]);
+        return $stmt->fetchAll(PDO::FETCH_COLUMN);
+    }
+
+    /**
+     * Check if user has sensor restrictions for a device
+     * @param int $userId
+     * @param int $deviceId
+     * @return bool - True if restricted, false if has access to all sensors
+     */
+    public function hasSensorRestrictions($userId, $deviceId) {
+        $sql = "SELECT COUNT(*) FROM user_device_sensors WHERE user_id = :user_id AND device_id = :device_id";
+        $stmt = $this->db->prepare($sql);
+        $stmt->execute([':user_id' => $userId, ':device_id' => $deviceId]);
+        return (int)$stmt->fetchColumn() > 0;
+    }
+
+    /**
+     * Check if user has access to a specific sensor on a device
+     * @param int $userId
+     * @param int $deviceId
+     * @param string $logKey
+     * @return bool
+     */
+    public function hasAccessToSensor($userId, $deviceId, $logKey) {
+        // First check if user has access to the device
+        if (!$this->hasAccessToDevice($userId, $deviceId)) {
+            return false;
+        }
+
+        // Check if there are sensor restrictions
+        if (!$this->hasSensorRestrictions($userId, $deviceId)) {
+            // No restrictions = access to all sensors
+            return true;
+        }
+
+        // Check if this specific sensor is in the allowed list
+        $sql = "SELECT COUNT(*) FROM user_device_sensors WHERE user_id = :user_id AND device_id = :device_id AND log_key = :log_key";
+        $stmt = $this->db->prepare($sql);
+        $stmt->execute([':user_id' => $userId, ':device_id' => $deviceId, ':log_key' => $logKey]);
+        return (int)$stmt->fetchColumn() > 0;
+    }
+
+    /**
+     * Filter sensor data based on user's access
+     * @param int $userId
+     * @param int $deviceId
+     * @param array $sensorData - Array of sensor records with 'log_key' field
+     * @return array - Filtered array with only allowed sensors
+     */
+    public function filterSensorsByAccess($userId, $deviceId, $sensorData) {
+        // Check if there are restrictions
+        $allowedSensors = $this->getAllowedSensors($userId, $deviceId);
+
+        // No restrictions = return all data
+        if (empty($allowedSensors)) {
+            return $sensorData;
+        }
+
+        // Filter to only allowed sensors
+        return array_filter($sensorData, function($sensor) use ($allowedSensors) {
+            return isset($sensor['log_key']) && in_array($sensor['log_key'], $allowedSensors);
+        });
+    }
 }

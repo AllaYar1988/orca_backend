@@ -75,6 +75,21 @@ if ($deviceId) {
         exit;
     }
     $filters['device_id'] = $deviceId;
+
+    // Check for sensor-level restrictions
+    $allowedSensors = $userModel->getAllowedSensors($authUser['id'], $deviceId);
+    if (!empty($allowedSensors)) {
+        // If specific log_key requested, verify user has access to it
+        if ($logKey && !in_array($logKey, $allowedSensors)) {
+            http_response_code(403);
+            echo json_encode(['success' => false, 'error' => 'You do not have access to this sensor']);
+            exit;
+        }
+        // If no specific log_key, filter to allowed sensors only
+        if (!$logKey) {
+            $filters['log_keys'] = $allowedSensors;
+        }
+    }
 } else {
     $filters['device_ids'] = $assignedDeviceIds;
 }

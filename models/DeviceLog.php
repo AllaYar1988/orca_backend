@@ -81,6 +81,18 @@ class DeviceLog {
             $params[':log_key'] = '%' . $filters['log_key'] . '%';
         }
 
+        // Filter by multiple log_keys (for sensor-level access control)
+        if (!empty($filters['log_keys']) && is_array($filters['log_keys'])) {
+            $keyPlaceholders = [];
+            foreach ($filters['log_keys'] as $i => $logKey) {
+                $keyPlaceholders[] = ":log_key_$i";
+                $params[":log_key_$i"] = $logKey;
+            }
+            if (!empty($keyPlaceholders)) {
+                $sql .= " AND l.log_key IN (" . implode(',', $keyPlaceholders) . ")";
+            }
+        }
+
         if (!empty($filters['date_from'])) {
             $sql .= " AND l.logged_at >= :date_from";
             $params[':date_from'] = $filters['date_from'];
@@ -154,6 +166,18 @@ class DeviceLog {
         if (!empty($filters['log_key'])) {
             $sql .= " AND l.log_key LIKE :log_key";
             $params[':log_key'] = '%' . $filters['log_key'] . '%';
+        }
+
+        // Filter by multiple log_keys (for sensor-level access control)
+        if (!empty($filters['log_keys']) && is_array($filters['log_keys'])) {
+            $keyPlaceholders = [];
+            foreach ($filters['log_keys'] as $i => $logKey) {
+                $keyPlaceholders[] = ":log_key_cnt_$i";
+                $params[":log_key_cnt_$i"] = $logKey;
+            }
+            if (!empty($keyPlaceholders)) {
+                $sql .= " AND l.log_key IN (" . implode(',', $keyPlaceholders) . ")";
+            }
         }
 
         if (!empty($filters['date_from'])) {

@@ -81,7 +81,18 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET') {
         exit;
     }
 
+    // Check for sensor-level restrictions
+    $allowedSensors = $userModel->getAllowedSensors($authUser['id'], $deviceId);
+    $hasSensorRestrictions = !empty($allowedSensors);
+
     if ($logKey) {
+        // Check sensor access if restrictions exist
+        if ($hasSensorRestrictions && !in_array($logKey, $allowedSensors)) {
+            http_response_code(403);
+            echo json_encode(['success' => false, 'error' => 'Access denied to this sensor']);
+            exit;
+        }
+
         // Get specific sensor config
         $config = $sensorConfigModel->getConfig($deviceId, $logKey);
         if ($config) {
@@ -113,6 +124,18 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET') {
 
         // Also get all unique log keys from device_logs
         $logKeys = $sensorConfigModel->getDeviceLogKeys($deviceId);
+
+        // Filter by allowed sensors if restrictions exist
+        if ($hasSensorRestrictions) {
+            $configs = array_filter($configs, function($c) use ($allowedSensors) {
+                return in_array($c['log_key'], $allowedSensors);
+            });
+            $configs = array_values($configs); // Re-index array
+            $logKeys = array_filter($logKeys, function($k) use ($allowedSensors) {
+                return in_array($k, $allowedSensors);
+            });
+            $logKeys = array_values($logKeys); // Re-index array
+        }
 
         echo json_encode([
             'success' => true,
