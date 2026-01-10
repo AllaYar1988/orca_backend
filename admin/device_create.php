@@ -18,6 +18,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         'company_id' => (int)($_POST['company_id'] ?? 0),
         'name' => trim($_POST['name'] ?? ''),
         'serial_number' => trim($_POST['serial_number'] ?? ''),
+        'device_secret' => $_POST['device_secret'] ?? '',
         'description' => trim($_POST['description'] ?? ''),
         'device_type' => trim($_POST['device_type'] ?? ''),
         'is_active' => isset($_POST['is_active']) ? 1 : 0
@@ -26,13 +27,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     if (empty($data['name']) || empty($data['serial_number']) || !$data['company_id']) {
         $message = 'Company, Name, and Serial Number are required.';
         $messageType = 'danger';
+    } elseif (empty($data['device_secret']) || strlen($data['device_secret']) < 6) {
+        $message = 'Device Password is required and must be at least 6 characters.';
+        $messageType = 'danger';
     } else {
         try {
             $id = $deviceModel->create($data);
             if ($id) {
                 $message = 'Device created successfully!';
                 $messageType = 'success';
-                $data = ['company_id' => '', 'name' => '', 'serial_number' => '', 'description' => '', 'device_type' => '', 'is_active' => 1];
+                $data = ['company_id' => '', 'name' => '', 'serial_number' => '', 'device_secret' => '', 'description' => '', 'device_type' => '', 'is_active' => 1];
             } else {
                 $message = 'Failed to create device.';
                 $messageType = 'danger';
@@ -47,7 +51,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         }
     }
 } else {
-    $data = ['company_id' => $_GET['company_id'] ?? '', 'name' => '', 'serial_number' => '', 'description' => '', 'device_type' => '', 'is_active' => 1];
+    $data = ['company_id' => $_GET['company_id'] ?? '', 'name' => '', 'serial_number' => '', 'device_secret' => '', 'description' => '', 'device_type' => '', 'is_active' => 1];
 }
 
 include 'includes/header.php';
@@ -89,19 +93,26 @@ include 'includes/header.php';
                     </div>
 
                     <div class="row">
-                        <div class="col-md-6 mb-3">
+                        <div class="col-md-4 mb-3">
                             <label for="name" class="form-label">Device Name <span class="text-danger">*</span></label>
                             <input type="text" class="form-control" id="name" name="name"
                                    value="<?php echo htmlspecialchars($data['name']); ?>" required
                                    placeholder="e.g., Temperature Sensor 1">
                         </div>
 
-                        <div class="col-md-6 mb-3">
+                        <div class="col-md-4 mb-3">
                             <label for="serial_number" class="form-label">Serial Number <span class="text-danger">*</span></label>
                             <input type="text" class="form-control" id="serial_number" name="serial_number"
                                    value="<?php echo htmlspecialchars($data['serial_number']); ?>" required
                                    placeholder="e.g., DEV-2024-001">
-                            <div class="form-text">Unique identifier used by the device to send logs</div>
+                            <div class="form-text">Unique identifier for the device</div>
+                        </div>
+
+                        <div class="col-md-4 mb-3">
+                            <label for="device_secret" class="form-label">Device Password <span class="text-danger">*</span></label>
+                            <input type="password" class="form-control" id="device_secret" name="device_secret" required
+                                   placeholder="Min 6 characters">
+                            <div class="form-text">Used by device to request API token</div>
                         </div>
                     </div>
 

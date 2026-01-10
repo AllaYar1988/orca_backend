@@ -13,8 +13,14 @@ class Device {
         // Generate API key if not provided
         $apiKey = isset($data['api_key']) ? $data['api_key'] : $this->generateApiKey();
 
-        $sql = "INSERT INTO {$this->table} (company_id, name, serial_number, api_key, description, device_type, is_active)
-                VALUES (:company_id, :name, :serial_number, :api_key, :description, :device_type, :is_active)";
+        // Hash device secret (password) if provided
+        $deviceSecret = null;
+        if (!empty($data['device_secret'])) {
+            $deviceSecret = password_hash($data['device_secret'], PASSWORD_DEFAULT);
+        }
+
+        $sql = "INSERT INTO {$this->table} (company_id, name, serial_number, api_key, device_secret, description, device_type, is_active)
+                VALUES (:company_id, :name, :serial_number, :api_key, :device_secret, :description, :device_type, :is_active)";
 
         $stmt = $this->db->prepare($sql);
         $stmt->execute([
@@ -22,6 +28,7 @@ class Device {
             ':name' => $data['name'],
             ':serial_number' => $data['serial_number'],
             ':api_key' => $apiKey,
+            ':device_secret' => $deviceSecret,
             ':description' => isset($data['description']) ? $data['description'] : null,
             ':device_type' => isset($data['device_type']) ? $data['device_type'] : null,
             ':is_active' => isset($data['is_active']) ? $data['is_active'] : 1
@@ -155,6 +162,12 @@ class Device {
                 $fields[] = "$field = :$field";
                 $params[":$field"] = $data[$field];
             }
+        }
+
+        // Handle device_secret (password) separately - hash it
+        if (!empty($data['device_secret'])) {
+            $fields[] = "device_secret = :device_secret";
+            $params[':device_secret'] = password_hash($data['device_secret'], PASSWORD_DEFAULT);
         }
 
         if (empty($fields)) {
