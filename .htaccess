@@ -1,0 +1,55 @@
+# Apache Configuration for Orca Backend
+# Enable RewriteEngine
+RewriteEngine On
+
+# Security: Deny access to sensitive files
+<FilesMatch "^\.env|\.gitignore|composer\.json|composer\.lock">
+    Order allow,deny
+    Deny from all
+</FilesMatch>
+
+# Deny access to config directory (except through PHP)
+<IfModule mod_rewrite.c>
+    RewriteRule ^config/ - [F,L]
+</IfModule>
+
+# Security Headers
+<IfModule mod_headers.c>
+    # Prevent MIME-type sniffing
+    Header set X-Content-Type-Options "nosniff"
+
+    # XSS Protection
+    Header set X-XSS-Protection "1; mode=block"
+
+    # Clickjacking Protection
+    Header set X-Frame-Options "SAMEORIGIN"
+
+    # Referrer Policy
+    Header set Referrer-Policy "strict-origin-when-cross-origin"
+</IfModule>
+
+# Disable directory listing
+Options -Indexes
+
+# Set default charset
+AddDefaultCharset UTF-8
+
+# PHP Settings (if mod_php)
+<IfModule mod_php.c>
+    php_flag display_errors Off
+    php_flag log_errors On
+    php_value error_log logs/php_errors.log
+</IfModule>
+
+# Enable GZIP compression
+<IfModule mod_deflate.c>
+    AddOutputFilterByType DEFLATE application/json
+    AddOutputFilterByType DEFLATE text/plain
+    AddOutputFilterByType DEFLATE text/html
+</IfModule>
+
+# Cache control for static files
+<IfModule mod_expires.c>
+    ExpiresActive On
+    ExpiresByType application/json "access plus 0 seconds"
+</IfModule>

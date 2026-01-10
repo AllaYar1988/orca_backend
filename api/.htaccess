@@ -1,0 +1,7 @@
+# Enable Authorization header passthrough
+RewriteEngine On
+RewriteCond %{HTTP:Authorization} .
+RewriteRule .* - [E=HTTP_AUTHORIZATION:%{HTTP:Authorization}]
+
+# Also set via CGI/FastCGI
+SetEnvIf Authorization "(.*)" HTTP_AUTHORIZATION=$1
