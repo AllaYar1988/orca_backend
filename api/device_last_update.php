@@ -65,7 +65,7 @@ if (!$userModel->hasAccessToDevice($authUser['id'], $deviceId)) {
 
 $db = Database::getInstance()->getConnection();
 
-// Get device info and last_seen_at from devices table
+// Get device info with last_seen_at, is_online, and seconds_ago calculated in SQL
 $stmt = $db->prepare("
     SELECT d.last_seen_at,
            CASE
@@ -73,7 +73,12 @@ $stmt = $db->prepare("
                AND d.last_seen_at >= UTC_TIMESTAMP() - INTERVAL 60 MINUTE
                THEN 1
                ELSE 0
-           END as is_online
+           END as is_online,
+           CASE
+               WHEN d.last_seen_at IS NOT NULL
+               THEN TIMESTAMPDIFF(SECOND, d.last_seen_at, UTC_TIMESTAMP())
+               ELSE NULL
+           END as seconds_ago
     FROM devices d
     WHERE d.id = :device_id
 ");
@@ -92,11 +97,13 @@ $result = $stmt->fetch();
 $lastUpdate = $result['last_update'];
 $lastSeenAt = $deviceResult ? $deviceResult['last_seen_at'] : null;
 $isOnline = $deviceResult ? (bool)$deviceResult['is_online'] : false;
+$secondsAgo = $deviceResult && $deviceResult['seconds_ago'] !== null ? (int)$deviceResult['seconds_ago'] : null;
 
 echo json_encode([
     'success' => true,
     'last_update' => $lastUpdate,
     'last_seen_at' => $lastSeenAt,
     'is_online' => $isOnline,
+    'seconds_ago' => $secondsAgo,
     'has_data' => $lastUpdate !== null
 ]);
