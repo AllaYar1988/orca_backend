@@ -32,6 +32,7 @@ if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
 
 require_once __DIR__ . '/../models/Device.php';
 require_once __DIR__ . '/../models/DeviceLog.php';
+require_once __DIR__ . '/../models/SensorConfig.php';
 
 $input = file_get_contents('php://input');
 $data = json_decode($input, true);
@@ -70,12 +71,36 @@ if (!$device['company_active']) {
 }
 
 $logModel = new DeviceLog();
+$sensorConfigModel = new SensorConfig();
+
+$logKey = $data['key'] ?? null;
+$rawValue = $data['value'] ?? null;
+
+// Get sensor config for this log key
+$sensorConfig = null;
+$convertedValue = $rawValue;
+$status = 'normal';
+
+if ($logKey) {
+    $sensorConfig = $sensorConfigModel->getConfig($device['id'], $logKey);
+
+    // Apply zero-span conversion if sensor is 4-20mA type
+    if ($sensorConfig && $sensorConfig['data_type'] === '4-20' && $rawValue !== null) {
+        $convertedValue = $sensorConfigModel->convertValue($rawValue, $sensorConfig);
+    }
+
+    // Calculate status tag based on thresholds
+    if ($sensorConfig && $convertedValue !== null) {
+        $status = $sensorConfigModel->calculateStatus($convertedValue, $sensorConfig);
+    }
+}
 
 $logData = [
     'device_id' => $device['id'],
     'serial_number' => $data['serial_number'],
-    'log_key' => $data['key'] ?? null,
-    'log_value' => $data['value'] ?? null,
+    'log_key' => $logKey,
+    'log_value' => $convertedValue,
+    'status' => $status,
     'log_data' => $data['data'] ?? null,
     'ip_address' => $_SERVER['REMOTE_ADDR'] ?? null,
     'logged_at' => $data['timestamp'] ?? date('Y-m-d H:i:s')
@@ -86,12 +111,23 @@ $logId = $logModel->create($logData);
 if ($logId) {
     $deviceModel->updateLastSeen($device['id']);
 
-    http_response_code(201);
-    echo json_encode([
+    $response = [
         'success' => true,
         'message' => 'Log recorded',
-        'log_id' => $logId
-    ]);
+        'log_id' => $logId,
+        'status' => $status
+    ];
+
+    // Include alarm info if critical
+    if ($status === 'critical' && $sensorConfig) {
+        $alarmResult = $sensorConfigModel->checkAlarm($convertedValue, $sensorConfig);
+        if ($alarmResult['alarm']) {
+            $response['alarm'] = $alarmResult;
+        }
+    }
+
+    http_response_code(201);
+    echo json_encode($response);
 } else {
     http_response_code(500);
     echo json_encode(['success' => false, 'error' => 'Failed to save log']);

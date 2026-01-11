@@ -43,6 +43,7 @@ if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
 require_once __DIR__ . '/../models/Device.php';
 require_once __DIR__ . '/../models/DeviceLog.php';
 require_once __DIR__ . '/../models/SensorConfig.php';
+require_once __DIR__ . '/../services/EmailService.php';
 
 $input = file_get_contents('php://input');
 $data = json_decode($input, true);
@@ -115,7 +116,13 @@ foreach ($data['logs'] as $log) {
         $convertedValue = $sensorConfigModel->convertValue($rawValue, $sensorConfig);
     }
 
-    // Check for alarms
+    // Calculate status tag based on thresholds
+    $status = 'normal';
+    if ($sensorConfig && $convertedValue !== null) {
+        $status = $sensorConfigModel->calculateStatus($convertedValue, $sensorConfig);
+    }
+
+    // Check for alarms (for response and potential email notification)
     if ($sensorConfig && $convertedValue !== null) {
         $alarmResult = $sensorConfigModel->checkAlarm($convertedValue, $sensorConfig);
         if ($alarmResult['alarm']) {
@@ -123,7 +130,8 @@ foreach ($data['logs'] as $log) {
                 'key' => $logKey,
                 'type' => $alarmResult['type'],
                 'value' => $convertedValue,
-                'message' => $alarmResult['message']
+                'message' => $alarmResult['message'],
+                'status' => $status
             ];
         }
     }
@@ -133,6 +141,7 @@ foreach ($data['logs'] as $log) {
         'serial_number' => $data['serial_number'],
         'log_key' => $logKey,
         'log_value' => $convertedValue,  // Store converted value
+        'status' => $status,              // Store status tag
         'log_data' => $log['data'] ?? null,
         'ip_address' => $ipAddress,
         'logged_at' => $log['timestamp'] ?? $logTimestamp
@@ -159,6 +168,28 @@ if ($savedCount > 0) {
     // Include alarms if any
     if (!empty($alarms)) {
         $response['alarms'] = $alarms;
+
+        // Send email notifications for critical alarms
+        $emailService = new EmailService();
+        if ($emailService->isEnabled()) {
+            // Get notification recipients for this device (from sensor_configs or company settings)
+            // For now, we'll check if there's a notification email in the device/company record
+            $notifyEmail = $device['notify_email'] ?? null;
+
+            if ($notifyEmail) {
+                foreach ($alarms as $alarm) {
+                    // Only send for critical status (to avoid spam)
+                    if ($alarm['status'] === 'critical') {
+                        $alarm['timestamp'] = $logTimestamp;
+                        $emailService->sendAlarmNotification(
+                            ['name' => $device['name'], 'serial_number' => $device['serial_number']],
+                            $alarm,
+                            $notifyEmail
+                        );
+                    }
+                }
+            }
+        }
     }
 
     http_response_code(201);

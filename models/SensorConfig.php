@@ -145,6 +145,64 @@ class SensorConfig {
     }
 
     /**
+     * Calculate status tag for a sensor value based on threshold configuration
+     * Used at data ingestion time to tag each reading with its status
+     *
+     * Status values:
+     * - 'normal': Value within thresholds
+     * - 'warning': Value within 10% of threshold (approaching limit)
+     * - 'critical': Value exceeds min/max alarm threshold
+     *
+     * @param float $value The sensor reading value
+     * @param array|null $config Sensor configuration with alarm thresholds
+     * @param bool $enableWarningZone Whether to calculate warning zone (default: true)
+     * @return string 'normal', 'warning', or 'critical'
+     */
+    public function calculateStatus($value, $config, $enableWarningZone = true) {
+        // If no config or alarms disabled, always normal
+        if (!$config || !$config['alarm_enabled']) {
+            return 'normal';
+        }
+
+        $minAlarm = $config['min_alarm'];
+        $maxAlarm = $config['max_alarm'];
+        $numValue = floatval($value);
+
+        // Check critical thresholds first (highest priority)
+        if ($minAlarm !== null && $numValue < floatval($minAlarm)) {
+            return 'critical';
+        }
+        if ($maxAlarm !== null && $numValue > floatval($maxAlarm)) {
+            return 'critical';
+        }
+
+        // Check warning zone (within 10% of threshold)
+        if ($enableWarningZone) {
+            $warningBuffer = 0.10; // 10%
+
+            if ($minAlarm !== null) {
+                $minAlarmFloat = floatval($minAlarm);
+                // Warning zone is 10% above the min threshold
+                $warningMin = $minAlarmFloat + (abs($minAlarmFloat) * $warningBuffer);
+                if ($numValue < $warningMin) {
+                    return 'warning';
+                }
+            }
+
+            if ($maxAlarm !== null) {
+                $maxAlarmFloat = floatval($maxAlarm);
+                // Warning zone is 10% below the max threshold
+                $warningMax = $maxAlarmFloat - (abs($maxAlarmFloat) * $warningBuffer);
+                if ($numValue > $warningMax) {
+                    return 'warning';
+                }
+            }
+        }
+
+        return 'normal';
+    }
+
+    /**
      * Get all unique log keys for a device from device_logs
      */
     public function getDeviceLogKeys($deviceId) {

@@ -10,8 +10,8 @@ class DeviceLog {
     }
 
     public function create($data) {
-        $sql = "INSERT INTO {$this->table} (device_id, serial_number, log_key, log_value, log_data, ip_address, logged_at)
-                VALUES (:device_id, :serial_number, :log_key, :log_value, :log_data, :ip_address, :logged_at)";
+        $sql = "INSERT INTO {$this->table} (device_id, serial_number, log_key, log_value, status, log_data, ip_address, logged_at)
+                VALUES (:device_id, :serial_number, :log_key, :log_value, :status, :log_data, :ip_address, :logged_at)";
 
         $stmt = $this->db->prepare($sql);
         $stmt->execute([
@@ -19,6 +19,7 @@ class DeviceLog {
             ':serial_number' => $data['serial_number'],
             ':log_key' => isset($data['log_key']) ? $data['log_key'] : null,
             ':log_value' => isset($data['log_value']) ? $data['log_value'] : null,
+            ':status' => isset($data['status']) ? $data['status'] : 'normal',
             ':log_data' => isset($data['log_data']) ? json_encode($data['log_data']) : null,
             ':ip_address' => isset($data['ip_address']) ? $data['ip_address'] : null,
             ':logged_at' => isset($data['logged_at']) ? $data['logged_at'] : date('Y-m-d H:i:s')
