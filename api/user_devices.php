@@ -41,22 +41,16 @@ $userModel = new User();
 // Get assigned devices
 $devices = $userModel->getAssignedDevices($authUser['id']);
 
-// Format response
+// Format response - is_online is now calculated in SQL query
 $formattedDevices = [];
 foreach ($devices as $device) {
-    $isOnline = false;
-    if ($device['last_seen_at']) {
-        $lastSeen = strtotime($device['last_seen_at']);
-        $isOnline = (time() - $lastSeen < 300); // 5 minutes
-    }
-
     $formattedDevices[] = [
         'id' => $device['id'],
         'name' => $device['name'],
         'serial_number' => $device['serial_number'],
         'device_type' => $device['device_type'],
         'description' => $device['description'],
-        'is_online' => $isOnline,
+        'is_online' => (bool)($device['is_online'] ?? false),
         'last_seen_at' => $device['last_seen_at']
     ];
 }

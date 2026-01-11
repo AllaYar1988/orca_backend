@@ -215,7 +215,18 @@ class User {
     }
 
     public function getAssignedDevices($userId) {
-        $sql = "SELECT d.*, c.name as company_name
+        // Calculate is_online dynamically: device is online if last_seen_at is within last 5 minutes
+        // Use UTC_TIMESTAMP() since last_seen_at is stored in UTC
+        // Select specific columns to override the static d.is_online column
+        $sql = "SELECT d.id, d.company_id, d.name, d.serial_number, d.description,
+                d.device_type, d.is_active, d.last_seen_at, d.created_at, d.updated_at,
+                c.name as company_name,
+                CASE
+                    WHEN d.last_seen_at IS NOT NULL
+                    AND d.last_seen_at >= UTC_TIMESTAMP() - INTERVAL 60 MINUTE
+                    THEN 1
+                    ELSE 0
+                END as is_online
                 FROM devices d
                 INNER JOIN user_devices ud ON d.id = ud.device_id
                 LEFT JOIN companies c ON d.company_id = c.id
@@ -260,9 +271,12 @@ class User {
     }
 
     public function getAssignedCompanies($userId) {
+        // Calculate online_count dynamically based on last_seen_at (within 5 minutes = online)
         $sql = "SELECT c.*,
                 (SELECT COUNT(*) FROM devices d WHERE d.company_id = c.id AND d.is_active = 1) as device_count,
-                (SELECT COUNT(*) FROM devices d WHERE d.company_id = c.id AND d.is_active = 1 AND d.is_online = 1) as online_count
+                (SELECT COUNT(*) FROM devices d WHERE d.company_id = c.id AND d.is_active = 1
+                    AND d.last_seen_at IS NOT NULL
+                    AND d.last_seen_at >= UTC_TIMESTAMP() - INTERVAL 60 MINUTE) as online_count
                 FROM companies c
                 INNER JOIN user_companies uc ON c.id = uc.company_id
                 WHERE uc.user_id = :user_id AND c.is_active = 1
@@ -292,7 +306,18 @@ class User {
             return [];
         }
 
-        $sql = "SELECT d.*, c.name as company_name
+        // Calculate is_online dynamically: device is online if last_seen_at is within last 5 minutes
+        // Use UTC_TIMESTAMP() since last_seen_at is stored in UTC
+        // Select specific columns to override the static d.is_online column
+        $sql = "SELECT d.id, d.company_id, d.name, d.serial_number, d.description,
+                d.device_type, d.is_active, d.last_seen_at, d.created_at, d.updated_at,
+                c.name as company_name,
+                CASE
+                    WHEN d.last_seen_at IS NOT NULL
+                    AND d.last_seen_at >= UTC_TIMESTAMP() - INTERVAL 60 MINUTE
+                    THEN 1
+                    ELSE 0
+                END as is_online
                 FROM devices d
                 INNER JOIN user_devices ud ON d.id = ud.device_id
                 LEFT JOIN companies c ON d.company_id = c.id

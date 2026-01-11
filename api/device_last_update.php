@@ -65,6 +65,21 @@ if (!$userModel->hasAccessToDevice($authUser['id'], $deviceId)) {
 
 $db = Database::getInstance()->getConnection();
 
+// Get device info and last_seen_at from devices table
+$stmt = $db->prepare("
+    SELECT d.last_seen_at,
+           CASE
+               WHEN d.last_seen_at IS NOT NULL
+               AND d.last_seen_at >= UTC_TIMESTAMP() - INTERVAL 60 MINUTE
+               THEN 1
+               ELSE 0
+           END as is_online
+    FROM devices d
+    WHERE d.id = :device_id
+");
+$stmt->execute([':device_id' => $deviceId]);
+$deviceResult = $stmt->fetch();
+
 // Get the most recent log timestamp for this device
 $stmt = $db->prepare("
     SELECT MAX(logged_at) as last_update
@@ -75,9 +90,13 @@ $stmt->execute([':device_id' => $deviceId]);
 $result = $stmt->fetch();
 
 $lastUpdate = $result['last_update'];
+$lastSeenAt = $deviceResult ? $deviceResult['last_seen_at'] : null;
+$isOnline = $deviceResult ? (bool)$deviceResult['is_online'] : false;
 
 echo json_encode([
     'success' => true,
     'last_update' => $lastUpdate,
+    'last_seen_at' => $lastSeenAt,
+    'is_online' => $isOnline,
     'has_data' => $lastUpdate !== null
 ]);
