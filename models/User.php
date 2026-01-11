@@ -215,9 +215,8 @@ class User {
     }
 
     public function getAssignedDevices($userId) {
-        // Calculate is_online dynamically: device is online if last_seen_at is within last 5 minutes
+        // Calculate is_online and seconds_ago dynamically
         // Use UTC_TIMESTAMP() since last_seen_at is stored in UTC
-        // Select specific columns to override the static d.is_online column
         $sql = "SELECT d.id, d.company_id, d.name, d.serial_number, d.description,
                 d.device_type, d.is_active, d.last_seen_at, d.created_at, d.updated_at,
                 c.name as company_name,
@@ -226,7 +225,12 @@ class User {
                     AND d.last_seen_at >= UTC_TIMESTAMP() - INTERVAL 60 MINUTE
                     THEN 1
                     ELSE 0
-                END as is_online
+                END as is_online,
+                CASE
+                    WHEN d.last_seen_at IS NOT NULL
+                    THEN TIMESTAMPDIFF(SECOND, d.last_seen_at, UTC_TIMESTAMP())
+                    ELSE NULL
+                END as seconds_ago
                 FROM devices d
                 INNER JOIN user_devices ud ON d.id = ud.device_id
                 LEFT JOIN companies c ON d.company_id = c.id
@@ -306,9 +310,8 @@ class User {
             return [];
         }
 
-        // Calculate is_online dynamically: device is online if last_seen_at is within last 5 minutes
+        // Calculate is_online and seconds_ago dynamically
         // Use UTC_TIMESTAMP() since last_seen_at is stored in UTC
-        // Select specific columns to override the static d.is_online column
         $sql = "SELECT d.id, d.company_id, d.name, d.serial_number, d.description,
                 d.device_type, d.is_active, d.last_seen_at, d.created_at, d.updated_at,
                 c.name as company_name,
@@ -317,7 +320,12 @@ class User {
                     AND d.last_seen_at >= UTC_TIMESTAMP() - INTERVAL 60 MINUTE
                     THEN 1
                     ELSE 0
-                END as is_online
+                END as is_online,
+                CASE
+                    WHEN d.last_seen_at IS NOT NULL
+                    THEN TIMESTAMPDIFF(SECOND, d.last_seen_at, UTC_TIMESTAMP())
+                    ELSE NULL
+                END as seconds_ago
                 FROM devices d
                 INNER JOIN user_devices ud ON d.id = ud.device_id
                 LEFT JOIN companies c ON d.company_id = c.id

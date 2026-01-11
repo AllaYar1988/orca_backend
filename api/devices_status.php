@@ -104,7 +104,12 @@ $stmt = $db->prepare("
             AND last_seen_at >= UTC_TIMESTAMP() - INTERVAL 60 MINUTE
             THEN 1
             ELSE 0
-        END as is_online
+        END as is_online,
+        CASE
+            WHEN last_seen_at IS NOT NULL
+            THEN TIMESTAMPDIFF(SECOND, last_seen_at, UTC_TIMESTAMP())
+            ELSE NULL
+        END as seconds_ago
     FROM devices
     WHERE id IN ($placeholders)
 ");
@@ -117,7 +122,8 @@ foreach ($results as $row) {
     $devices[] = [
         'id' => (int)$row['id'],
         'is_online' => (bool)$row['is_online'],
-        'last_seen_at' => $row['last_seen_at']
+        'last_seen_at' => $row['last_seen_at'],
+        'seconds_ago' => $row['seconds_ago'] !== null ? (int)$row['seconds_ago'] : null
     ];
 }
 
