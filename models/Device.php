@@ -63,10 +63,9 @@ class Device {
      * @param string $serialNumber Device serial number
      * @param int $timestamp Unix timestamp from request
      * @param string $signature HMAC signature from device
-     * @param int $toleranceSeconds Allow timestamp within this window (default 5 min)
      * @return array ['valid' => bool, 'device' => array|null, 'error' => string|null]
      */
-    public function verifyHmac($serialNumber, $timestamp, $signature, $toleranceSeconds = 300) {
+    public function verifyHmac($serialNumber, $timestamp, $signature) {
         $device = $this->getBySerialNumber($serialNumber);
 
         if (!$device) {
@@ -79,12 +78,6 @@ class Device {
 
         if (!$device['company_active']) {
             return ['valid' => false, 'device' => $device, 'error' => 'Company is inactive'];
-        }
-
-        // Check timestamp is within tolerance (prevents replay attacks)
-        $now = time();
-        if (abs($now - $timestamp) > $toleranceSeconds) {
-            return ['valid' => false, 'device' => $device, 'error' => 'Timestamp expired'];
         }
 
         // Compute expected signature: SHA256(api_key + timestamp)
