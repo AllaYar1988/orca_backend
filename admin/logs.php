@@ -148,7 +148,8 @@ include 'includes/header.php';
             <table class="table table-hover table-sm">
                 <thead>
                     <tr>
-                        <th style="width: 150px;">Time</th>
+                        <th style="width: 140px;">Logged</th>
+                        <th style="width: 140px;">Received</th>
                         <th>Device</th>
                         <th>Serial</th>
                         <th>Company</th>
@@ -161,13 +162,16 @@ include 'includes/header.php';
                 <tbody>
                     <?php if (empty($logs)): ?>
                     <tr>
-                        <td colspan="8" class="text-center text-muted py-4">No logs found</td>
+                        <td colspan="9" class="text-center text-muted py-4">No logs found</td>
                     </tr>
                     <?php else: ?>
                     <?php foreach ($logs as $log): ?>
                     <tr>
-                        <td class="text-nowrap small">
+                        <td class="text-nowrap small" title="Device time">
                             <?php echo date('Y-m-d H:i:s', strtotime($log['logged_at'])); ?>
+                        </td>
+                        <td class="text-nowrap small text-muted" title="Server received time">
+                            <?php echo date('Y-m-d H:i:s', strtotime($log['created_at'])); ?>
                         </td>
                         <td>
                             <?php if ($log['device_name']): ?>

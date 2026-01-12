@@ -156,7 +156,9 @@ foreach ($data['logs'] as $log) {
 }
 
 if ($savedCount > 0) {
-    $deviceModel->updateLastSeen($device['id'], (int)$data['timestamp']);
+    // Use server time for last_seen_at (for accurate online/offline detection)
+    // Don't pass timestamp - this will use UTC_TIMESTAMP() on the server
+    $deviceModel->updateLastSeen($device['id']);
 
     $response = [
         'success' => true,
