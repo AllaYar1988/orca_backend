@@ -37,6 +37,7 @@ require_once __DIR__ . '/auth_middleware.php';
 // $authUser is now available with user data
 
 require_once __DIR__ . '/../config/database.php';
+require_once __DIR__ . '/../models/VirtualDevice.php';
 
 $companyId = isset($_GET['company_id']) ? (int)$_GET['company_id'] : 0;
 
@@ -71,23 +72,32 @@ if (!$company) {
 $devices = $userModel->getCompanyDevices($authUser['id'], $companyId);
 
 // Get virtual devices for this company that the user has access to
-$virtualDevices = $userModel->getCompanyVirtualDevices($authUser['id'], $companyId);
+$rawVirtualDevices = $userModel->getCompanyVirtualDevices($authUser['id'], $companyId);
 
-// Debug: Log to file
-$debugLog = [
-    'timestamp' => date('Y-m-d H:i:s'),
-    'user_id' => $authUser['id'],
-    'company_id' => $companyId,
-    'virtual_devices_count' => count($virtualDevices),
-    'virtual_devices' => $virtualDevices
-];
-file_put_contents(__DIR__ . '/../logs/vd_debug.log', json_encode($debugLog, JSON_PRETTY_PRINT) . "\n", FILE_APPEND);
+// Add status info to each virtual device
+$virtualDeviceModel = new VirtualDevice();
+$virtualDevices = [];
+foreach ($rawVirtualDevices as $vd) {
+    $status = $virtualDeviceModel->getStatusSummary($vd['id']);
+    $virtualDevices[] = [
+        'id' => (int)$vd['id'],
+        'name' => $vd['name'],
+        'description' => $vd['description'],
+        'company_id' => (int)$vd['company_id'],
+        'company_name' => $vd['company_name'],
+        'sensor_count' => (int)$vd['sensor_count'],
+        'is_online' => $status['is_online'],
+        'all_online' => $status['all_online'],
+        'live_count' => $status['live_count'],
+        'total_count' => $status['total_count'],
+        'seconds_ago' => $status['seconds_ago'],
+        'last_seen_at' => $status['last_seen_at']
+    ];
+}
 
 echo json_encode([
     'success' => true,
     'company' => $company,
     'devices' => $devices,
-    'virtual_devices' => $virtualDevices,
-    'debug_user_id' => $authUser['id'],
-    'debug_company_id' => $companyId
+    'virtual_devices' => $virtualDevices
 ]);
