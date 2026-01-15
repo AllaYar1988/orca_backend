@@ -70,8 +70,24 @@ if (!$company) {
 // Get devices for this company that the user has access to
 $devices = $userModel->getCompanyDevices($authUser['id'], $companyId);
 
+// Get virtual devices for this company that the user has access to
+$virtualDevices = $userModel->getCompanyVirtualDevices($authUser['id'], $companyId);
+
+// Debug: Log to file
+$debugLog = [
+    'timestamp' => date('Y-m-d H:i:s'),
+    'user_id' => $authUser['id'],
+    'company_id' => $companyId,
+    'virtual_devices_count' => count($virtualDevices),
+    'virtual_devices' => $virtualDevices
+];
+file_put_contents(__DIR__ . '/../logs/vd_debug.log', json_encode($debugLog, JSON_PRETTY_PRINT) . "\n", FILE_APPEND);
+
 echo json_encode([
     'success' => true,
     'company' => $company,
-    'devices' => $devices
+    'devices' => $devices,
+    'virtual_devices' => $virtualDevices,
+    'debug_user_id' => $authUser['id'],
+    'debug_company_id' => $companyId
 ]);
