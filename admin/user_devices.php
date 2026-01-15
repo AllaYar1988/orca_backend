@@ -278,6 +278,9 @@ include 'includes/header.php';
 
         <!-- Navigation -->
         <div class="d-flex gap-2">
+            <a href="user_virtual_devices.php?id=<?php echo $id; ?>" class="btn btn-outline-primary">
+                <i class="bi bi-diagram-3 me-2"></i>Manage Virtual Devices
+            </a>
             <a href="user_edit.php?id=<?php echo $id; ?>" class="btn btn-outline-secondary">
                 <i class="bi bi-pencil me-2"></i>Edit User
             </a>

@@ -661,4 +661,116 @@ class User {
             return isset($sensor['log_key']) && in_array($sensor['log_key'], $allowedSensors);
         });
     }
+
+    // ==========================================
+    // Virtual Device Access Methods
+    // ==========================================
+
+    /**
+     * Assign virtual device access to a user
+     * @param int $userId
+     * @param int $virtualDeviceId
+     * @return bool
+     */
+    public function assignVirtualDevice($userId, $virtualDeviceId) {
+        $sql = "INSERT IGNORE INTO user_virtual_devices (user_id, virtual_device_id) VALUES (:user_id, :virtual_device_id)";
+        $stmt = $this->db->prepare($sql);
+        return $stmt->execute([':user_id' => $userId, ':virtual_device_id' => $virtualDeviceId]);
+    }
+
+    /**
+     * Remove virtual device access from a user
+     * @param int $userId
+     * @param int $virtualDeviceId
+     * @return bool
+     */
+    public function removeVirtualDevice($userId, $virtualDeviceId) {
+        $sql = "DELETE FROM user_virtual_devices WHERE user_id = :user_id AND virtual_device_id = :virtual_device_id";
+        $stmt = $this->db->prepare($sql);
+        return $stmt->execute([':user_id' => $userId, ':virtual_device_id' => $virtualDeviceId]);
+    }
+
+    /**
+     * Remove all virtual device assignments for a user
+     * @param int $userId
+     * @return bool
+     */
+    public function removeAllVirtualDevices($userId) {
+        $sql = "DELETE FROM user_virtual_devices WHERE user_id = :user_id";
+        $stmt = $this->db->prepare($sql);
+        return $stmt->execute([':user_id' => $userId]);
+    }
+
+    /**
+     * Get all virtual devices assigned to a user with status info
+     * @param int $userId
+     * @return array
+     */
+    public function getAssignedVirtualDevices($userId) {
+        $sql = "SELECT vd.id, vd.company_id, vd.name, vd.description, vd.is_active,
+                       vd.created_at, vd.updated_at,
+                       c.name as company_name,
+                       (SELECT COUNT(*) FROM virtual_device_sensors WHERE virtual_device_id = vd.id) as sensor_count
+                FROM virtual_devices vd
+                INNER JOIN user_virtual_devices uvd ON vd.id = uvd.virtual_device_id
+                LEFT JOIN companies c ON vd.company_id = c.id
+                WHERE uvd.user_id = :user_id AND vd.is_active = 1
+                ORDER BY vd.name";
+        $stmt = $this->db->prepare($sql);
+        $stmt->execute([':user_id' => $userId]);
+        return $stmt->fetchAll();
+    }
+
+    /**
+     * Get IDs of virtual devices assigned to a user
+     * @param int $userId
+     * @return array
+     */
+    public function getAssignedVirtualDeviceIds($userId) {
+        $sql = "SELECT virtual_device_id FROM user_virtual_devices WHERE user_id = :user_id";
+        $stmt = $this->db->prepare($sql);
+        $stmt->execute([':user_id' => $userId]);
+        return $stmt->fetchAll(PDO::FETCH_COLUMN);
+    }
+
+    /**
+     * Check if user has access to a specific virtual device
+     * @param int $userId
+     * @param int $virtualDeviceId
+     * @return bool
+     */
+    public function hasAccessToVirtualDevice($userId, $virtualDeviceId) {
+        $sql = "SELECT COUNT(*) FROM user_virtual_devices WHERE user_id = :user_id AND virtual_device_id = :virtual_device_id";
+        $stmt = $this->db->prepare($sql);
+        $stmt->execute([':user_id' => $userId, ':virtual_device_id' => $virtualDeviceId]);
+        return (int)$stmt->fetchColumn() > 0;
+    }
+
+    /**
+     * Get virtual devices for a specific company that user has access to
+     * @param int $userId
+     * @param int $companyId
+     * @return array
+     */
+    public function getCompanyVirtualDevices($userId, $companyId) {
+        // First check if user has access to this company
+        if (!$this->hasAccessToCompany($userId, $companyId)) {
+            return [];
+        }
+
+        $sql = "SELECT vd.id, vd.company_id, vd.name, vd.description, vd.is_active,
+                       vd.created_at, vd.updated_at,
+                       c.name as company_name,
+                       (SELECT COUNT(*) FROM virtual_device_sensors WHERE virtual_device_id = vd.id) as sensor_count
+                FROM virtual_devices vd
+                INNER JOIN user_virtual_devices uvd ON vd.id = uvd.virtual_device_id
+                LEFT JOIN companies c ON vd.company_id = c.id
+                WHERE uvd.user_id = :user_id
+                AND vd.company_id = :company_id
+                AND vd.is_active = 1
+                ORDER BY vd.name";
+        $stmt = $this->db->prepare($sql);
+        $stmt->execute([':user_id' => $userId, ':company_id' => $companyId]);
+        return $stmt->fetchAll();
+    }
 }

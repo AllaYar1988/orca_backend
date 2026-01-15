@@ -252,6 +252,10 @@ $currentUser = getCurrentUser();
                 <i class="bi bi-hdd-stack"></i>
                 Device List
             </a>
+            <a href="virtual_devices.php" class="nav-link <?php echo ($currentPage ?? '') === 'virtual_devices' ? 'active' : ''; ?>">
+                <i class="bi bi-diagram-3"></i>
+                Virtual Devices
+            </a>
 
             <div class="nav-section">Users</div>
             <a href="user_create.php" class="nav-link <?php echo ($currentPage ?? '') === 'user_create' ? 'active' : ''; ?>">
