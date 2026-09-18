@@ -332,13 +332,4 @@ class Provision {
         return $r;
     }
 
-    /**
-     * Serials seen in the field with no live grant behind them: devices
-     * built outside the process. Reads the view the migration creates.
-     */
-    public function unprovisionedDevices() {
-        return $this->db->query(
-            "SELECT * FROM unprovisioned_devices ORDER BY last_seen_at DESC"
-        )->fetchAll();
-    }
 }

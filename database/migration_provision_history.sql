@@ -49,3 +49,16 @@ INSERT INTO provision_history
 SELECT id, uid, serial_number, grant_b64, issued_utc, 'issued', tool, ip_address, created_at
 FROM provisions
 WHERE NOT EXISTS (SELECT 1 FROM provision_history h WHERE h.uid = provisions.uid);
+
+-- ---------------------------------------------------------------------------
+-- And drop the field cross-check view, which is not wanted after all.
+--
+-- It listed devices that had reported to this server under a serial no grant
+-- was ever issued for. Every unit built before licensing is one of those, so
+-- on a live system the list is mostly history rather than a question - and
+-- this page is for what Orca provisions, nothing else.
+--
+-- Nothing reads it any more. IF EXISTS, so this is safe whether or not the
+-- first migration got as far as creating it.
+-- ---------------------------------------------------------------------------
+DROP VIEW IF EXISTS unprovisioned_devices;

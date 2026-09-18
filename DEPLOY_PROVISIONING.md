@@ -86,26 +86,24 @@ echo 'GRANT_PRIVATE_KEY_PATH=/home/sgkk4203/grant_key.pem' >> .env
 
 ## 4. Server: the database
 
-Additive only - a new `provisions` table and one view; nothing the current
-code reads changes.
+Additive only - a new `provisions` table and its history; nothing the
+current code reads changes.
 
 ```bash
 cd /home/sgkk4203/public_html/orca_backend
 git fetch origin
-git show origin/main:database/migration_provisioning.sql > /tmp/m1.sql
-git show origin/main:database/migration_provisioning_simplify.sql > /tmp/m2.sql
-mysql -u <DB_USER> -p <DB_NAME> < /tmp/m1.sql
-mysql -u <DB_USER> -p <DB_NAME> < /tmp/m2.sql
+for m in provisioning provisioning_simplify provision_history; do
+  git show origin/main:database/migration_$m.sql > /tmp/$m.sql
+  mysql -u <DB_USER> -p <DB_NAME> < /tmp/$m.sql
+done
 ```
 
-Both, in that order. The first builds the table; the second takes
+All three, in that order. The first builds the table; the second takes
 provisioning back off `companies`, because companies are CUSTOMERS and the
-vendor is a different thing. (Or paste each file into phpMyAdmin -> SQL.)
+vendor is a different thing; the third adds the record of every serial change.
+(Or paste each file into phpMyAdmin -> SQL.)
 
-If the first stops at `CREATE OR REPLACE VIEW` with a privilege error, the DB
-user lacks `CREATE VIEW`: grant it in the hosting panel and re-run that one
-statement. Everything else works without the view; the admin page says so
-rather than failing.
+Re-running any of them is safe - they are written to be.
 
 ## 5. Server: pull the code
 
@@ -203,5 +201,4 @@ by one.
 | `signer_ready: false`, "openssl" | step 2: web PHP vs CLI PHP |
 | every grant refused on the board | step 6: `grant_pubkey.php` vs `license_key.h` — a different key |
 | `401` from the API | `PROVISION_KEY` in `.env` must equal Orca's built-in key; `api/.htaccess` passes the header through, confirmed on this host |
-| admin page warns about the view | step 4: `CREATE VIEW` privilege |
 | `503 NOT_CONFIGURED` | step 7: `PROVISION_KEY` missing from `.env` |

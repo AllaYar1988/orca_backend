@@ -101,17 +101,6 @@ $totalPages = ceil($totalCount / $limit);
 
 $stats = $provModel->stats();
 
-// The cross-check reads a VIEW the migration creates. If it is not there yet
-// - migration not run, or a hosting DB user without CREATE VIEW - say so in
-// the page rather than take the whole page down with it.
-$unprovisioned = [];
-$crossCheckError = null;
-try {
-    $unprovisioned = $provModel->unprovisionedDevices();
-} catch (Exception $e) {
-    $crossCheckError = $e->getMessage();
-}
-
 $signerState = 'ok';
 $signerNote  = '';
 try {
@@ -194,44 +183,6 @@ include 'includes/header.php';
     <?php endif; ?>
   </div>
 </div>
-
-<!-- Built outside the process -->
-<?php if ($crossCheckError !== null): ?>
-<div class="alert alert-warning" role="alert">
-    <i class="bi bi-exclamation-triangle"></i> Field cross-check unavailable — the <code>unprovisioned_devices</code> view is missing. Run <code>database/migration_provisioning.sql</code> (the DB user needs CREATE VIEW).
-    <div class="small text-muted mt-1"><?php echo htmlspecialchars($crossCheckError); ?></div>
-</div>
-<?php endif; ?>
-<?php if ($unprovisioned): ?>
-<div class="card mb-4 border-warning">
-    <div class="card-header d-flex justify-content-between align-items-center">
-        <h5 class="mb-0"><i class="bi bi-exclamation-triangle text-warning"></i> Seen in the field, never provisioned</h5>
-        <span class="badge bg-warning text-dark"><?php echo count($unprovisioned); ?></span>
-    </div>
-    <div class="card-body p-0">
-        <div class="table-responsive">
-            <table class="table table-sm mb-0">
-                <thead class="table-light">
-                    <tr><th>Serial</th><th>Company</th><th>Last seen</th><th>Registered</th></tr>
-                </thead>
-                <tbody>
-                <?php foreach ($unprovisioned as $d): ?>
-                    <tr>
-                        <td class="font-monospace"><a href="device_edit.php?id=<?php echo $d['id']; ?>"><?php echo htmlspecialchars($d['serial_number']); ?></a></td>
-                        <td><?php echo htmlspecialchars($d['company_name'] ?? '—'); ?></td>
-                        <td class="text-muted small"><?php echo $d['last_seen_at'] ? date('Y-m-d H:i', strtotime($d['last_seen_at'])) : 'never'; ?></td>
-                        <td class="text-muted small"><?php echo date('Y-m-d', strtotime($d['created_at'])); ?></td>
-                    </tr>
-                <?php endforeach; ?>
-                </tbody>
-            </table>
-        </div>
-    </div>
-    <div class="card-footer text-muted small">
-        Devices that connected to this server with a serial no grant was ever issued for. Existing units from before licensing appear here too — the list shrinks as they are re-provisioned, and what remains is worth a question.
-    </div>
-</div>
-<?php endif; ?>
 
 <!-- Serial changes -->
 <?php if ($changes): ?>
