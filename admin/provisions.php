@@ -51,6 +51,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['replace_serial'])) {
                 'tool'          => 'admin',
                 'ip_address'    => $_SERVER['REMOTE_ADDR'] ?? null,
             ]);
+            $provModel->logHistory([
+                'provision_id'    => $newId,
+                'uid'             => $uid,
+                'serial_number'   => $serial,
+                'previous_serial' => null,
+                'grant_b64'       => $grant,
+                'issued_utc'      => $issued,
+                'event'           => 'replaced_chip',
+                'tool'            => 'admin',
+                'ip_address'      => $_SERVER['REMOTE_ADDR'] ?? null,
+            ]);
             $provModel->retire($old['id'], $newId);
             $db->commit();
             header('Location: provisions.php?replaced=' . urlencode($serial) . '&search=' . urlencode($uid));
@@ -81,6 +92,10 @@ if ($liveFilter !== '') {
 }
 
 $rows       = $provModel->getAll($filters);
+// What each listed chip used to be called. One query for the page, not one
+// per row - and it is the whole point of keeping the history.
+$wasNamed = $provModel->previousSerials(array_column($rows, 'uid'));
+$changes  = $provModel->recentChanges(15);
 $totalCount = $provModel->count($filters);
 $totalPages = ceil($totalCount / $limit);
 
@@ -218,6 +233,41 @@ include 'includes/header.php';
 </div>
 <?php endif; ?>
 
+<!-- Serial changes -->
+<?php if ($changes): ?>
+<div class="card mb-4">
+    <div class="card-header d-flex justify-content-between align-items-center">
+        <h5 class="mb-0"><i class="bi bi-pencil"></i> Serial numbers changed</h5>
+        <span class="text-muted small">the chip is the device; the serial is a label on it</span>
+    </div>
+    <div class="card-body p-0">
+        <div class="table-responsive">
+            <table class="table table-sm mb-0">
+                <thead class="table-light">
+                    <tr><th>When</th><th>Chip</th><th>From</th><th>To</th><th>By</th></tr>
+                </thead>
+                <tbody>
+                <?php foreach ($changes as $c): ?>
+                    <tr>
+                        <td class="small text-muted"><?php echo date('Y-m-d H:i', strtotime($c['created_at'])); ?></td>
+                        <td class="font-monospace small"><?php echo htmlspecialchars($c['uid']); ?></td>
+                        <td class="font-monospace"><?php echo htmlspecialchars($c['previous_serial']); ?></td>
+                        <td class="font-monospace fw-semibold"><?php echo htmlspecialchars($c['serial_number']); ?></td>
+                        <td class="small text-muted"><?php echo htmlspecialchars($c['tool'] ?? '—'); ?></td>
+                    </tr>
+                <?php endforeach; ?>
+                </tbody>
+            </table>
+        </div>
+    </div>
+    <div class="card-footer text-muted small">
+        Renaming a board does not make a second device - same chip, same row, and the count is unchanged.
+        Every grant ever issued is kept in <code>provision_history</code>, including the ones replaced here:
+        a grant already installed on a board goes on working until that board is provisioned again.
+    </div>
+</div>
+<?php endif; ?>
+
 <!-- Replacement chip -->
 <div class="card mb-4">
     <div class="card-header">
@@ -272,6 +322,7 @@ include 'includes/header.php';
                 <thead class="table-light">
                     <tr>
                         <th>Serial</th>
+                        <th>Previously</th>
                         <th>UID</th>
                         <th>Issued</th>
                         <th>Tool</th>
@@ -282,13 +333,19 @@ include 'includes/header.php';
                 </thead>
                 <tbody>
                 <?php if (!$rows): ?>
-                    <tr><td colspan="7" class="text-center text-muted py-4">No grants match.</td></tr>
+                    <tr><td colspan="8" class="text-center text-muted py-4">No grants match.</td></tr>
                 <?php endif; ?>
                 <?php foreach ($rows as $r): ?>
                     <tr class="<?php echo $r['retired_at'] ? 'table-secondary text-muted' : ''; ?>">
                         <td class="font-monospace">
                             <?php echo htmlspecialchars($r['serial_number']); ?>
                             <?php if ($r['retired_at']): ?><span class="badge bg-secondary">retired</span><?php endif; ?>
+                        </td>
+                        <td class="font-monospace small text-muted">
+                            <?php
+                              $was = $wasNamed[$r['uid']] ?? [];
+                              echo $was ? htmlspecialchars(implode(' → ', $was)) . ' →' : '<span class="text-muted">—</span>';
+                            ?>
                         </td>
                         <td class="font-monospace small"><?php echo htmlspecialchars($r['uid']); ?></td>
                         <td class="small"><?php echo date('Y-m-d H:i', strtotime($r['created_at'])); ?></td>
@@ -298,7 +355,7 @@ include 'includes/header.php';
                         </td>
                         <td class="text-end"><?php echo (int)$r['reissue_count']; ?></td>
                         <td>
-                            <button type="button" class="btn btn-sm btn-outline-secondary" onclick="copyGrant(this, '<?php echo htmlspecialchars($r['grant_b64']); ?>')" title="Copy the grant - install with: license <grant>">
+                            <button type="button" class="btn btn-sm btn-outline-secondary" onclick="copyGrant(this, '<?php echo htmlspecialchars($r['grant_b64']); ?>')" title="Copy the grant - install with: license &lt;grant&gt;">
                                 <i class="bi bi-clipboard"></i>
                             </button>
                         </td>

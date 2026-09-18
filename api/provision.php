@@ -21,6 +21,7 @@
  *   "serial_number": "A0020707",
  *   "grant":         "<168 base64 characters>",   -> device: license <grant>
  *   "reissued":      false,                       true = this chip was known
+ *   "changed_from":  "A0000001",                  present when the serial was rewritten
  *   "vendor":        "Almas Electronic",
  *   "provisioned":   137                          live devices in total
  * }
@@ -39,19 +40,28 @@
  * provisions.company_id survives, nullable and unwritten, for the question it
  * can answer later: which customer a device was sold to.
  *
- * IDEMPOTENT ON UID
- * A chip this server has seen before gets the SAME serial and the SAME grant
- * bytes back. Re-flashing, a wiped config, an RMA: all replays of a decision
- * already made, and none of them is a new device. The exception is a chip
- * whose grant was retired because the MCU was replaced - 410, and the admin
- * issues for the new chip from the Provisioning page.
+ * ONE ROW PER CHIP
+ * Ask about a chip we know, naming no serial, and you get the SAME serial and
+ * the SAME grant bytes back: re-flashing, a wiped config and an RMA are all
+ * replays of a decision already made, and none is a new device.
+ *
+ * Name a DIFFERENT serial and the chip takes it. The chip is the device; the
+ * serial is a label on it, and labels get mistyped or repurposed before a
+ * board ships. Refusing would only push the correction into hand-edited SQL,
+ * which is the one path that leaves no trace at all. So the rewrite is
+ * allowed, the change goes to provision_history first, and the reply carries
+ * "changed_from" so the bench sees what it just overwrote. The device count
+ * does not move: same chip, same row.
+ *
+ * A chip whose grant was RETIRED (the MCU was replaced) is still 410 - that
+ * is a different physical board, and the admin issues for it deliberately.
  *
  * Errors carry a stable "code" so the tool can act on it rather than parse
  * the message:
  *   400 BAD_REQUEST     malformed uid / serial / JSON
  *   401 UNAUTHORIZED    no or wrong provision key
  *   503 NOT_CONFIGURED  PROVISION_KEY is not set in .env
- *   409 CONFLICT        serial already on another chip
+ *   409 CONFLICT        the serial asked for is live on a different chip
  *   410 RETIRED         chip replaced; grant retired
  *   500 SIGNER          key not loaded - see GRANT_PRIVATE_KEY_PATH
  */
@@ -111,9 +121,30 @@ try {
             provisionError("This chip's grant was retired (MCU replaced). Issue one for the new chip from the Provisioning page.",
                            'RETIRED', 410);
         }
+        // A different serial: rewrite it, and keep a record of what it was.
         if ($wantSerial !== '' && $wantSerial !== $existing['serial_number']) {
-            $db->rollBack();
-            provisionError('This chip already holds serial ' . $existing['serial_number'], 'CONFLICT', 409);
+            $onOther = $prov->findLiveBySerial($wantSerial);
+            if ($onOther && (int)$onOther['id'] !== (int)$existing['id']) {
+                $db->rollBack();
+                provisionError('Serial ' . $wantSerial . ' is already on chip ' . $onOther['uid'],
+                               'CONFLICT', 409);
+            }
+
+            $issued = time();
+            $grant  = $signer->signBase64($uid, $wantSerial, 0, $issued);
+            $prov->changeSerial($existing['id'], $wantSerial, $grant, $issued, $tool, $ip);
+            $db->commit();
+
+            jsonResponse([
+                'success'       => true,
+                'serial_number' => $wantSerial,
+                'grant'         => $grant,
+                'reissued'      => true,
+                'changed_from'  => $existing['serial_number'],
+                'issued_utc'    => $issued,
+                'vendor'        => $vendor['name'],
+                'provisioned'   => $prov->countLive(),
+            ]);
         }
         if (!$signer->verifyBase64($existing['grant_b64'])) {
             // The stored grant no longer verifies against this server's key -
@@ -159,7 +190,7 @@ try {
     // apart. The firmware carries the field but does not act on it.
     $grant = $signer->signBase64($uid, $serial, 0, $issued);
 
-    $prov->create([
+    $id = $prov->create([
         'uid'           => $uid,
         'serial_number' => $serial,
         'grant_b64'     => $grant,
@@ -167,6 +198,17 @@ try {
         'tool'          => $tool,
         'tool_version'  => $toolVersion,
         'fw_version'    => $fwVersion,
+        'ip_address'    => $ip,
+    ]);
+
+    $prov->logHistory([
+        'provision_id'  => $id,
+        'uid'           => $uid,
+        'serial_number' => $serial,
+        'grant_b64'     => $grant,
+        'issued_utc'    => $issued,
+        'event'         => 'issued',
+        'tool'          => $tool,
         'ip_address'    => $ip,
     ]);
 

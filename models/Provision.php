@@ -11,10 +11,14 @@ require_once __DIR__ . '/../config/database.php';
  * it can answer later - which CUSTOMER a device was sold to.
  *
  * The invariants the model keeps:
- *   - uid is unique: a chip asked about twice gets the same answer.
- *   - a serial is live on at most one chip (retired rows may share it).
+ *   - uid is unique: one row per chip, so a chip is one device however many
+ *     times it is provisioned or renamed.
+ *   - a serial is live on at most one chip.
  *   - allocation reads the highest serial FOR UPDATE, so two benches asking
  *     at once cannot be handed the same number.
+ *   - every grant ever issued is written to provision_history before the row
+ *     that held it changes. The current state can be rewritten; the record of
+ *     what it was cannot.
  */
 class Provision {
     private $db;
@@ -91,6 +95,112 @@ class Provision {
             $next++;
         }
         throw new RuntimeException('serial range exhausted for prefix ' . $prefix);
+    }
+
+    /**
+     * Write one line of the timeline. Called for every grant handed out,
+     * including the first, so the history reads on its own without having to
+     * be joined back to the row it came from.
+     */
+    public function logHistory(array $d) {
+        $sql = "INSERT INTO provision_history
+                (provision_id, uid, serial_number, previous_serial, grant_b64,
+                 issued_utc, event, tool, ip_address)
+                VALUES
+                (:provision_id, :uid, :serial_number, :previous_serial, :grant_b64,
+                 :issued_utc, :event, :tool, :ip_address)";
+        $stmt = $this->db->prepare($sql);
+        $stmt->execute([
+            ':provision_id'    => $d['provision_id'] ?? null,
+            ':uid'             => strtoupper($d['uid']),
+            ':serial_number'   => $d['serial_number'],
+            ':previous_serial' => $d['previous_serial'] ?? null,
+            ':grant_b64'       => $d['grant_b64'],
+            ':issued_utc'      => $d['issued_utc'],
+            ':event'           => $d['event'],
+            ':tool'            => $d['tool'] ?? null,
+            ':ip_address'      => $d['ip_address'] ?? null,
+        ]);
+    }
+
+    /**
+     * Give a chip a different serial number.
+     *
+     * The chip is the device; the serial is a label on it, and labels get
+     * mistyped. Rewriting one is allowed and costs nothing - the old grant
+     * goes to history first, so what the board was called last week is still
+     * answerable. It does not make a second device: same uid, same row.
+     */
+    public function changeSerial($id, $newSerial, $grantB64, $issuedUtc,
+                                 $tool = null, $ip = null) {
+        $row = $this->getById($id);
+        if (!$row) {
+            return false;
+        }
+
+        $this->logHistory([
+            'provision_id'    => $id,
+            'uid'             => $row['uid'],
+            'serial_number'   => $newSerial,
+            'previous_serial' => $row['serial_number'],
+            'grant_b64'       => $grantB64,
+            'issued_utc'      => $issuedUtc,
+            'event'           => 'serial_changed',
+            'tool'            => $tool,
+            'ip_address'      => $ip,
+        ]);
+
+        $sql = "UPDATE {$this->table}
+                SET serial_number = :serial, grant_b64 = :grant, issued_utc = :issued,
+                    tool = COALESCE(:tool, tool), ip_address = COALESCE(:ip, ip_address)
+                WHERE id = :id";
+        $stmt = $this->db->prepare($sql);
+        $stmt->execute([
+            ':serial' => $newSerial, ':grant' => $grantB64, ':issued' => $issuedUtc,
+            ':tool' => $tool, ':ip' => $ip, ':id' => $id,
+        ]);
+        return true;
+    }
+
+    /**
+     * Every grant ever issued for one chip, newest first.
+     */
+    public function historyFor($uid) {
+        $stmt = $this->db->prepare(
+            "SELECT * FROM provision_history WHERE uid = :uid ORDER BY created_at DESC, id DESC");
+        $stmt->execute([':uid' => strtoupper($uid)]);
+        return $stmt->fetchAll();
+    }
+
+    /**
+     * Serials a chip used to have, for the listing. Keyed by uid.
+     */
+    public function previousSerials(array $uids) {
+        if (!$uids) {
+            return [];
+        }
+        $in = implode(',', array_fill(0, count($uids), '?'));
+        $stmt = $this->db->prepare(
+            "SELECT uid, previous_serial, created_at FROM provision_history
+             WHERE previous_serial IS NOT NULL AND uid IN ($in)
+             ORDER BY created_at");
+        $stmt->execute(array_map('strtoupper', $uids));
+        $out = [];
+        foreach ($stmt->fetchAll() as $r) {
+            $out[$r['uid']][] = $r['previous_serial'];
+        }
+        return $out;
+    }
+
+    /**
+     * Recent changes, for the admin page.
+     */
+    public function recentChanges($limit = 20) {
+        $stmt = $this->db->prepare(
+            "SELECT * FROM provision_history WHERE event = 'serial_changed'
+             ORDER BY created_at DESC, id DESC LIMIT " . (int)$limit);
+        $stmt->execute();
+        return $stmt->fetchAll();
     }
 
     /**
