@@ -1,26 +1,25 @@
 <?php
 /**
- * API: Provisioning status - "who am I, and how much quota is left"
+ * API: Provisioning status - "is this server ready, and does it know this chip"
  *
  * Endpoint: GET /api/provision_status.php
- * Authorization: Bearer <company provision_key>
+ * Authorization: Bearer <PROVISION_KEY from .env>
  *
  * Response 200:
  * {
  *   "success": true,
- *   "company": {"id": 3, "code": "POYAN", "name": "..."},
- *   "quota":   {"used": 41, "allowed": 100},
- *   "serial_prefix": "A2",
+ *   "vendor": "Almas Electronic",
+ *   "serial_prefix": "A",
+ *   "provisioned": 137,
  *   "signer_ready": true
  * }
  *
- * What Orca's "Test connection" button calls: proves the URL, the key and
- * the server's signing key are all in order without issuing anything.
- * Optional ?uid=<24 hex> also says whether that chip is already known.
+ * What Orca's "Test connection" button calls: proves the URL, the key and the
+ * server's signing key are all in order without issuing anything. Optional
+ * ?uid=<24 hex> also says whether that chip is already known.
  */
 
 require_once __DIR__ . '/init.php';
-require_once __DIR__ . '/../models/Company.php';
 require_once __DIR__ . '/../models/Provision.php';
 require_once __DIR__ . '/../services/GrantSigner.php';
 require_once __DIR__ . '/provision_auth.php';
@@ -29,7 +28,7 @@ if ($_SERVER['REQUEST_METHOD'] !== 'GET') {
     jsonResponse(['success' => false, 'error' => 'Method not allowed', 'code' => 'METHOD'], 405);
 }
 
-$company = provisionAuthenticate();     // exits with 401/403 otherwise
+$vendor = provisionAuthenticate();     // exits with 401/503 otherwise
 $prov = new Provision();
 
 $signerReady = true;
@@ -43,12 +42,9 @@ try {
 
 $out = [
     'success'       => true,
-    'company'       => ['id' => (int)$company['id'], 'code' => $company['code'], 'name' => $company['name']],
-    'quota'         => [
-        'used'    => $prov->countLive($company['id']),
-        'allowed' => $company['device_quota'] === null ? null : (int)$company['device_quota'],
-    ],
-    'serial_prefix' => $company['serial_prefix'],
+    'vendor'        => $vendor['name'],
+    'serial_prefix' => $vendor['serial_prefix'],
+    'provisioned'   => $prov->countLive(),
     'signer_ready'  => $signerReady,
 ];
 if ($signerError !== null) {
@@ -58,13 +54,13 @@ if ($signerError !== null) {
 $uid = strtoupper(trim((string)($_GET['uid'] ?? '')));
 if ($uid !== '') {
     if (!GrantSigner::isValidUid($uid)) {
-        jsonResponse(['success' => false, 'error' => 'uid must be 24 hex characters', 'code' => 'BAD_REQUEST'], 400);
+        jsonResponse(['success' => false, 'error' => 'uid must be 24 hex characters',
+                      'code' => 'BAD_REQUEST'], 400);
     }
     $row = $prov->findByUid($uid);
     $out['chip'] = $row ? [
         'known'         => true,
-        'mine'          => (int)$row['company_id'] === (int)$company['id'],
-        'serial_number' => (int)$row['company_id'] === (int)$company['id'] ? $row['serial_number'] : null,
+        'serial_number' => $row['serial_number'],
         'retired'       => $row['retired_at'] !== null,
     ] : ['known' => false];
 }

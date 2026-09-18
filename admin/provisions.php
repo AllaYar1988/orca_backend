@@ -2,14 +2,10 @@
 $pageTitle = 'Provisioning';
 $currentPage = 'provisions';
 
-require_once __DIR__ . '/../models/Company.php';
 require_once __DIR__ . '/../models/Provision.php';
 require_once __DIR__ . '/../services/GrantSigner.php';
 
-$companyModel = new Company();
 $provModel    = new Provision();
-
-$companies = $companyModel->getAll();
 
 // ---- actions ---------------------------------------------------------------
 
@@ -70,9 +66,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['replace_serial'])) {
 
 // ---- listing ---------------------------------------------------------------
 
-$search        = $_GET['search'] ?? '';
-$companyFilter = $_GET['company_id'] ?? '';
-$liveFilter    = $_GET['live'] ?? '';
+$search     = $_GET['search'] ?? '';
+$liveFilter = $_GET['live'] ?? '';
 $page   = max(1, (int)($_GET['page'] ?? 1));
 $limit  = 25;
 $offset = ($page - 1) * $limit;
@@ -80,9 +75,6 @@ $offset = ($page - 1) * $limit;
 $filters = ['limit' => $limit, 'offset' => $offset];
 if ($search) {
     $filters['search'] = $search;
-}
-if ($companyFilter) {
-    $filters['company_id'] = (int)$companyFilter;
 }
 if ($liveFilter !== '') {
     $filters['live'] = (int)$liveFilter;
@@ -92,7 +84,7 @@ $rows       = $provModel->getAll($filters);
 $totalCount = $provModel->count($filters);
 $totalPages = ceil($totalCount / $limit);
 
-$stats = $provModel->statsByCompany();
+$stats = $provModel->stats();
 
 // The cross-check reads a VIEW the migration creates. If it is not there yet
 // - migration not run, or a hosting DB user without CREATE VIEW - say so in
@@ -144,77 +136,48 @@ include 'includes/header.php';
 </div>
 <?php endif; ?>
 
-<!-- Per-company: the invoice -->
-<div class="card mb-4">
-    <div class="card-header d-flex justify-content-between align-items-center">
-        <h5 class="mb-0"><i class="bi bi-receipt"></i> Devices per company</h5>
-        <span class="text-muted small">live grants against quota · this month · re-issues</span>
-    </div>
-    <div class="card-body p-0">
-        <div class="table-responsive">
-            <table class="table table-hover mb-0">
-                <thead class="table-light">
-                    <tr>
-                        <th>Company</th>
-                        <th>Can provision</th>
-                        <th>Prefix / next</th>
-                        <th class="text-end">Live</th>
-                        <th class="text-end">Quota</th>
-                        <th class="text-end">This month</th>
-                        <th class="text-end">Re-issues</th>
-                        <th>Last issued</th>
-                    </tr>
-                </thead>
-                <tbody>
-                <?php foreach ($stats as $s): ?>
-                    <?php
-                        $live  = (int)$s['live'];
-                        $quota = $s['device_quota'];
-                        $pct   = ($quota !== null && $quota > 0) ? min(100, (int)round($live * 100 / $quota)) : null;
-                        $bar   = $pct === null ? '' : ($pct >= 100 ? 'bg-danger' : ($pct >= 80 ? 'bg-warning' : 'bg-success'));
-                    ?>
-                    <tr>
-                        <td>
-                            <a href="provisions.php?company_id=<?php echo $s['id']; ?>"><?php echo htmlspecialchars($s['name']); ?></a>
-                            <span class="text-muted small">(<?php echo htmlspecialchars($s['code']); ?>)</span>
-                            <?php if (!$s['is_active']): ?><span class="badge bg-secondary">inactive</span><?php endif; ?>
-                        </td>
-                        <td>
-                            <?php if ($s['can_provision']): ?>
-                                <span class="badge bg-success">key set</span>
-                            <?php else: ?>
-                                <span class="badge bg-light text-muted">no key</span>
-                            <?php endif; ?>
-                        </td>
-                        <td class="font-monospace small">
-                            <?php echo $s['serial_prefix'] ? htmlspecialchars($s['serial_prefix']) . ' / ' . (int)$s['serial_next'] : '<span class="text-muted">vendor supplies</span>'; ?>
-                        </td>
-                        <td class="text-end"><strong><?php echo $live; ?></strong></td>
-                        <td class="text-end" style="min-width:140px">
-                            <?php if ($quota === null): ?>
-                                <span class="text-muted">unlimited</span>
-                            <?php else: ?>
-                                <div class="d-flex align-items-center justify-content-end gap-2">
-                                    <span><?php echo (int)$quota; ?></span>
-                                    <div class="progress" style="width:70px;height:8px">
-                                        <div class="progress-bar <?php echo $bar; ?>" style="width:<?php echo $pct; ?>%"></div>
-                                    </div>
-                                </div>
-                            <?php endif; ?>
-                        </td>
-                        <td class="text-end"><?php echo (int)$s['this_month']; ?></td>
-                        <td class="text-end text-muted"><?php echo (int)$s['reissues']; ?></td>
-                        <td class="text-muted small"><?php echo $s['last_issued_at'] ? date('Y-m-d H:i', strtotime($s['last_issued_at'])) : '—'; ?></td>
-                    </tr>
-                <?php endforeach; ?>
-                </tbody>
-            </table>
+<!-- The production numbers -->
+<div class="row mb-4">
+  <?php
+    $cards = [
+      ['Devices provisioned', $stats['live'],       'bi-cpu',          'primary', 'live grants - one per chip'],
+      ['This month',          $stats['this_month'], 'bi-calendar-plus','success', 'issued since the 1st'],
+      ['Re-issues',           $stats['reissues'],   'bi-arrow-repeat', 'secondary','re-flashes and wiped configs - free'],
+      ['Retired',             $stats['retired'],    'bi-x-circle',     'warning', 'chips replaced'],
+    ];
+    foreach ($cards as $c): ?>
+    <div class="col-6 col-lg-3">
+      <div class="card h-100">
+        <div class="card-body">
+          <div class="d-flex justify-content-between align-items-start">
+            <div>
+              <div class="text-muted small"><?php echo $c[0]; ?></div>
+              <div class="fs-3 fw-semibold"><?php echo (int)$c[1]; ?></div>
+            </div>
+            <i class="bi <?php echo $c[2]; ?> fs-4 text-<?php echo $c[3]; ?>"></i>
+          </div>
+          <div class="text-muted" style="font-size:.75rem"><?php echo $c[4]; ?></div>
         </div>
+      </div>
     </div>
-    <div class="card-footer text-muted small">
-        Keys, quotas and prefixes are set from the server shell:
-        <code>php tools/set_provision_key.php &lt;CODE&gt; --quota N --prefix A2</code>
-    </div>
+  <?php endforeach; ?>
+</div>
+
+<div class="card mb-4">
+  <div class="card-body py-2 d-flex flex-wrap gap-4 align-items-center small">
+    <span><i class="bi bi-key"></i> Signing key:
+      <?php if ($signerState === 'ok'): ?>
+        <span class="text-success">ready</span> <code><?php echo htmlspecialchars($signerNote); ?></code>
+      <?php else: ?>
+        <span class="text-danger">not available</span>
+      <?php endif; ?>
+    </span>
+    <span class="text-muted">Serial prefix and the provisioning key live in <code>.env</code>
+      (<code>PROVISION_SERIAL_PREFIX</code>, <code>PROVISION_KEY</code>).</span>
+    <?php if ($stats['last_issued_at']): ?>
+      <span class="text-muted">Last issued <?php echo date('Y-m-d H:i', strtotime($stats['last_issued_at'])); ?></span>
+    <?php endif; ?>
+  </div>
 </div>
 
 <!-- Built outside the process -->
@@ -288,16 +251,8 @@ include 'includes/header.php';
     </div>
     <div class="card-body">
         <form method="GET" class="row g-2 mb-3">
-            <div class="col-md-4">
+            <div class="col-md-5">
                 <input type="text" name="search" class="form-control" placeholder="UID or serial" value="<?php echo htmlspecialchars($search); ?>">
-            </div>
-            <div class="col-md-3">
-                <select name="company_id" class="form-select">
-                    <option value="">All companies</option>
-                    <?php foreach ($companies as $c): ?>
-                        <option value="<?php echo $c['id']; ?>" <?php echo (string)$companyFilter === (string)$c['id'] ? 'selected' : ''; ?>><?php echo htmlspecialchars($c['name']); ?></option>
-                    <?php endforeach; ?>
-                </select>
             </div>
             <div class="col-md-2">
                 <select name="live" class="form-select">
@@ -318,7 +273,6 @@ include 'includes/header.php';
                     <tr>
                         <th>Serial</th>
                         <th>UID</th>
-                        <th>Company</th>
                         <th>Issued</th>
                         <th>Tool</th>
                         <th class="text-end">Re-issued</th>
@@ -328,7 +282,7 @@ include 'includes/header.php';
                 </thead>
                 <tbody>
                 <?php if (!$rows): ?>
-                    <tr><td colspan="8" class="text-center text-muted py-4">No grants match.</td></tr>
+                    <tr><td colspan="7" class="text-center text-muted py-4">No grants match.</td></tr>
                 <?php endif; ?>
                 <?php foreach ($rows as $r): ?>
                     <tr class="<?php echo $r['retired_at'] ? 'table-secondary text-muted' : ''; ?>">
@@ -337,7 +291,6 @@ include 'includes/header.php';
                             <?php if ($r['retired_at']): ?><span class="badge bg-secondary">retired</span><?php endif; ?>
                         </td>
                         <td class="font-monospace small"><?php echo htmlspecialchars($r['uid']); ?></td>
-                        <td><?php echo htmlspecialchars($r['company_name'] ?? '—'); ?></td>
                         <td class="small"><?php echo date('Y-m-d H:i', strtotime($r['created_at'])); ?></td>
                         <td class="small text-muted">
                             <?php echo htmlspecialchars(trim(($r['tool'] ?? '') . ' ' . ($r['tool_version'] ?? ''))) ?: '—'; ?>
@@ -368,7 +321,7 @@ include 'includes/header.php';
             <ul class="pagination justify-content-center">
                 <?php for ($i = 1; $i <= $totalPages; $i++): ?>
                     <li class="page-item <?php echo $i === $page ? 'active' : ''; ?>">
-                        <a class="page-link" href="?page=<?php echo $i; ?>&search=<?php echo urlencode($search); ?>&company_id=<?php echo urlencode($companyFilter); ?>&live=<?php echo urlencode($liveFilter); ?>"><?php echo $i; ?></a>
+                        <a class="page-link" href="?page=<?php echo $i; ?>&search=<?php echo urlencode($search); ?>&live=<?php echo urlencode($liveFilter); ?>"><?php echo $i; ?></a>
                     </li>
                 <?php endfor; ?>
             </ul>

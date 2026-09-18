@@ -33,20 +33,6 @@ class Company {
         return $stmt->fetch();
     }
 
-    /**
-     * The company behind a provisioning key, or false. Keys are random
-     * 256-bit tokens compared as-is; NULL means the company cannot provision.
-     */
-    public function getByProvisionKey($key) {
-        if (!is_string($key) || $key === '') {
-            return false;
-        }
-        $sql = "SELECT * FROM {$this->table} WHERE provision_key = :key";
-        $stmt = $this->db->prepare($sql);
-        $stmt->execute([':key' => $key]);
-        return $stmt->fetch();
-    }
-
     public function getAll($filters = array()) {
         $sql = "SELECT * FROM {$this->table} WHERE 1=1";
         $params = [];

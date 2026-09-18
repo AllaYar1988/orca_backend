@@ -1,19 +1,33 @@
 <?php
 /**
- * Provisioning authentication - the Bearer key a vendor's Orca sends.
+ * Provisioning authentication - the key the bench tool sends.
  *
- * Separate from auth_middleware.php on purpose. That file validates USER
- * tokens from user_login.php and exits when it finds none; this one looks a
- * COMPANY up by its provision_key. A vendor's Orca holds exactly one secret,
- * tied to one company row - leak it and one company's key is rotated, not a
- * user's password.
+ * One vendor: us. So there is no vendor table and no per-vendor row - the key
+ * is PROVISION_KEY in .env, and that is the whole of it.
+ *
+ * Be clear about what this key is for. Orca ships with it built in, so it is
+ * not a secret in any strong sense; anyone with the tool has it. What it does
+ * is keep api/provision.php from answering the open internet, so a scanner
+ * that finds the URL gets 401 instead of a signed grant. The real limit on
+ * who can make a device is the private signing key, which is on this server
+ * and nowhere else.
+ *
+ * When there is a second vendor this becomes a lookup in a `vendors` table
+ * and the key stops being shipped in the tool. The call sites do not change:
+ * they ask provisionAuthenticate() who is calling and get an array back.
  *
  * Usage:
  *   require_once __DIR__ . '/provision_auth.php';
- *   $company = provisionAuthenticate();   // exits 401/403 otherwise
+ *   $vendor = provisionAuthenticate();   // exits 401/503 otherwise
  */
 
-require_once __DIR__ . '/../models/Company.php';
+require_once __DIR__ . '/../config/env.php';
+
+/** @brief Serial numbers are prefix + digits, eight characters in all. */
+function provisionSerialPrefix() {
+    $p = strtoupper(trim((string)env('PROVISION_SERIAL_PREFIX', 'A')));
+    return preg_match('/^[A-Z0-9]{1,7}$/', $p) ? $p : 'A';
+}
 
 /**
  * The Bearer token, from wherever this host lets it through.
@@ -39,25 +53,35 @@ function provisionBearer() {
 }
 
 /**
- * The company behind the key, or a 401/403 and exit.
+ * Who is calling, or a 401/503 and exit.
+ *
+ * @return array{name:string, serial_prefix:string}
  */
 function provisionAuthenticate() {
-    $key = provisionBearer();
-    if ($key === null) {
+    $expected = trim((string)env('PROVISION_KEY', ''));
+
+    if ($expected === '') {
+        // Not configured is not the same as wrong, and saying so saves an
+        // afternoon: the tool reports it and the admin page shows it.
+        jsonResponse(['success' => false,
+                      'error' => 'Provisioning is not configured on this server - PROVISION_KEY is not set in .env',
+                      'code' => 'NOT_CONFIGURED'], 503);
+    }
+
+    $given = provisionBearer();
+    if ($given === null) {
         jsonResponse(['success' => false,
                       'error' => 'No provision key. Send it as: Authorization: Bearer <key>',
                       'code' => 'UNAUTHORIZED'], 401);
     }
 
-    $companyModel = new Company();
-    $company = $companyModel->getByProvisionKey($key);
-    if (!$company) {
+    // hash_equals, not ==: the comparison should not leak the key one
+    // character at a time to something that can time it.
+    if (!hash_equals($expected, $given)) {
         jsonResponse(['success' => false, 'error' => 'Provision key not recognised',
                       'code' => 'UNAUTHORIZED'], 401);
     }
-    if (!$company['is_active']) {
-        jsonResponse(['success' => false, 'error' => 'Company is inactive',
-                      'code' => 'FORBIDDEN'], 403);
-    }
-    return $company;
+
+    return ['name' => (string)env('PROVISION_VENDOR_NAME', 'Almas Electronic'),
+            'serial_prefix' => provisionSerialPrefix()];
 }

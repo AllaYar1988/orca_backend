@@ -4,14 +4,17 @@ require_once __DIR__ . '/../config/database.php';
 /**
  * Provision
  *
- * One row per chip, ever. The record of every grant this server issued, and
- * the quota and serial-allocation bookkeeping that goes with it.
+ * One row per chip, ever. The record of every grant this server issued.
+ *
+ * There is one vendor, so there is no owner column to group by: every row
+ * here is ours. company_id survives, nullable and unwritten, for the question
+ * it can answer later - which CUSTOMER a device was sold to.
  *
  * The invariants the model keeps:
  *   - uid is unique: a chip asked about twice gets the same answer.
  *   - a serial is live on at most one chip (retired rows may share it).
- *   - a serial is allocated under a row lock on the company, so two benches
- *     asking at once cannot be handed the same number.
+ *   - allocation reads the highest serial FOR UPDATE, so two benches asking
+ *     at once cannot be handed the same number.
  */
 class Provision {
     private $db;
@@ -26,13 +29,10 @@ class Provision {
     }
 
     /**
-     * The row for a chip, with its company, or false.
+     * The row for a chip, or false.
      */
     public function findByUid($uid) {
-        $sql = "SELECT p.*, c.name AS company_name, c.code AS company_code
-                FROM {$this->table} p
-                LEFT JOIN companies c ON c.id = p.company_id
-                WHERE p.uid = :uid";
+        $sql = "SELECT * FROM {$this->table} WHERE uid = :uid";
         $stmt = $this->db->prepare($sql);
         $stmt->execute([':uid' => strtoupper($uid)]);
         return $stmt->fetch();
@@ -50,52 +50,45 @@ class Provision {
     }
 
     /**
-     * Live grants a company holds - what its quota is measured against.
+     * Live grants in total - how many devices exist because of us.
      */
-    public function countLive($companyId) {
-        $sql = "SELECT COUNT(*) FROM {$this->table}
-                WHERE company_id = :cid AND retired_at IS NULL";
-        $stmt = $this->db->prepare($sql);
-        $stmt->execute([':cid' => $companyId]);
-        return (int)$stmt->fetchColumn();
+    public function countLive() {
+        return (int)$this->db->query(
+            "SELECT COUNT(*) FROM {$this->table} WHERE retired_at IS NULL")->fetchColumn();
     }
 
     /**
-     * Lock the company row and return it. Call inside a transaction; the
-     * lock is what makes allocation and the quota check atomic.
-     */
-    public function lockCompany($companyId) {
-        $sql = "SELECT * FROM companies WHERE id = :id FOR UPDATE";
-        $stmt = $this->db->prepare($sql);
-        $stmt->execute([':id' => $companyId]);
-        return $stmt->fetch();
-    }
-
-    /**
-     * Next serial from the company's range: prefix + zero-padded counter,
-     * eight characters in all (A2 + 000137 = A2000137), the shape every
-     * existing serial has and the shape the application's own buffers
-     * assume. Skips numbers already live, which happens after a vendor has
-     * supplied some serials by hand.
+     * Next serial: prefix + zero-padded counter, eight characters in all
+     * (A + 0020707 = A0020707), the shape every existing serial has and the
+     * shape the application's own buffers assume.
      *
-     * Company row must already be locked.
+     * Derived from the highest live serial rather than a stored counter, so
+     * there is no second number to keep in step with the rows. The SELECT
+     * takes FOR UPDATE, which is what stops two benches being handed the
+     * same number; fixed-width zero padding is what makes string ordering
+     * and numeric ordering the same thing.
+     *
+     * Call inside a transaction.
      */
-    public function allocateSerial(array $company) {
-        $prefix = (string)($company['serial_prefix'] ?? '');
-        if ($prefix === '') {
-            throw new RuntimeException('company has no serial_prefix; the vendor must supply a serial');
-        }
-        $width = max(1, 8 - strlen($prefix));
-        $next  = (int)$company['serial_next'];
+    public function allocateSerial($prefix) {
+        $prefix = strtoupper($prefix);
+        $width  = max(1, 8 - strlen($prefix));
+
+        $stmt = $this->db->prepare(
+            "SELECT serial_number FROM {$this->table}
+             WHERE serial_number LIKE :like AND CHAR_LENGTH(serial_number) = :len
+             ORDER BY serial_number DESC LIMIT 1 FOR UPDATE");
+        $stmt->execute([':like' => $prefix . '%', ':len' => strlen($prefix) + $width]);
+        $highest = $stmt->fetchColumn();
+
+        $next = $highest === false ? 1 : ((int)substr($highest, strlen($prefix)) + 1);
 
         for ($tries = 0; $tries < 10000; $tries++) {
             $serial = $prefix . str_pad((string)$next, $width, '0', STR_PAD_LEFT);
-            $next++;
             if (!$this->findLiveBySerial($serial)) {
-                $stmt = $this->db->prepare("UPDATE companies SET serial_next = :n WHERE id = :id");
-                $stmt->execute([':n' => $next, ':id' => $company['id']]);
                 return $serial;
             }
+            $next++;
         }
         throw new RuntimeException('serial range exhausted for prefix ' . $prefix);
     }
@@ -112,7 +105,7 @@ class Provision {
                  :tool, :tool_version, :fw_version, :ip_address)";
         $stmt = $this->db->prepare($sql);
         $stmt->execute([
-            ':company_id'    => $d['company_id'],
+            ':company_id'    => $d['company_id'] ?? null,
             ':uid'           => strtoupper($d['uid']),
             ':serial_number' => $d['serial_number'],
             ':grant_b64'     => $d['grant_b64'],
@@ -159,10 +152,7 @@ class Provision {
     }
 
     public function getById($id) {
-        $sql = "SELECT p.*, c.name AS company_name, c.code AS company_code
-                FROM {$this->table} p
-                LEFT JOIN companies c ON c.id = p.company_id
-                WHERE p.id = :id";
+        $sql = "SELECT * FROM {$this->table} WHERE id = :id";
         $stmt = $this->db->prepare($sql);
         $stmt->execute([':id' => $id]);
         return $stmt->fetch();
@@ -172,16 +162,9 @@ class Provision {
      * Listing for the admin page.
      */
     public function getAll(array $filters = []) {
-        $sql = "SELECT p.*, c.name AS company_name, c.code AS company_code
-                FROM {$this->table} p
-                LEFT JOIN companies c ON c.id = p.company_id
-                WHERE 1=1";
+        $sql = "SELECT * FROM {$this->table} p WHERE 1=1";
         $params = [];
 
-        if (!empty($filters['company_id'])) {
-            $sql .= " AND p.company_id = :cid";
-            $params[':cid'] = $filters['company_id'];
-        }
         if (!empty($filters['search'])) {
             $sql .= " AND (p.uid LIKE :s OR p.serial_number LIKE :s)";
             $params[':s'] = '%' . $filters['search'] . '%';
@@ -207,10 +190,6 @@ class Provision {
     public function count(array $filters = []) {
         $sql = "SELECT COUNT(*) FROM {$this->table} p WHERE 1=1";
         $params = [];
-        if (!empty($filters['company_id'])) {
-            $sql .= " AND p.company_id = :cid";
-            $params[':cid'] = $filters['company_id'];
-        }
         if (!empty($filters['search'])) {
             $sql .= " AND (p.uid LIKE :s OR p.serial_number LIKE :s)";
             $params[':s'] = '%' . $filters['search'] . '%';
@@ -224,24 +203,23 @@ class Provision {
     }
 
     /**
-     * Per company: live grants against quota, and this month's issues.
-     * The invoice, essentially.
+     * The production numbers: how many devices exist, and how lately.
      */
-    public function statsByCompany() {
-        $sql = "SELECT c.id, c.name, c.code, c.is_active,
-                       c.provision_key IS NOT NULL AS can_provision,
-                       c.device_quota, c.serial_prefix, c.serial_next,
-                       COUNT(p.id) AS total,
-                       SUM(p.retired_at IS NULL) AS live,
-                       SUM(p.retired_at IS NULL
-                           AND p.created_at >= DATE_FORMAT(NOW(), '%Y-%m-01')) AS this_month,
-                       SUM(p.reissue_count) AS reissues,
-                       MAX(p.created_at) AS last_issued_at
-                FROM companies c
-                LEFT JOIN {$this->table} p ON p.company_id = c.id
-                GROUP BY c.id
-                ORDER BY live DESC, c.name";
-        return $this->db->query($sql)->fetchAll();
+    public function stats() {
+        $sql = "SELECT COUNT(*) AS total,
+                       SUM(retired_at IS NULL) AS live,
+                       SUM(retired_at IS NOT NULL) AS retired,
+                       SUM(retired_at IS NULL
+                           AND created_at >= DATE_FORMAT(NOW(), '%Y-%m-01')) AS this_month,
+                       SUM(reissue_count) AS reissues,
+                       MIN(created_at) AS first_issued_at,
+                       MAX(created_at) AS last_issued_at
+                FROM {$this->table}";
+        $r = $this->db->query($sql)->fetch();
+        foreach (['total', 'live', 'retired', 'this_month', 'reissues'] as $k) {
+            $r[$k] = (int)$r[$k];
+        }
+        return $r;
     }
 
     /**

@@ -36,7 +36,7 @@ So, once, now:
 cd C:/AL/Private/orca_backend
 git status                       # 5 modified, 10 new - all provisioning
 git add -A
-git commit -m "Device provisioning: grants, quota, admin page"
+git commit -m "Device provisioning"
 git push origin main
 ```
 
@@ -86,22 +86,26 @@ echo 'GRANT_PRIVATE_KEY_PATH=/home/sgkk4203/grant_key.pem' >> .env
 
 ## 4. Server: the database
 
-Additive only — new columns on `companies`, a new `provisions` table, one
-view. Nothing the current code reads changes.
+Additive only - a new `provisions` table and one view; nothing the current
+code reads changes.
 
 ```bash
 cd /home/sgkk4203/public_html/orca_backend
 git fetch origin
-git show origin/main:database/migration_provisioning.sql > /tmp/migration_provisioning.sql
-mysql -u <DB_USER> -p <DB_NAME> < /tmp/migration_provisioning.sql
+git show origin/main:database/migration_provisioning.sql > /tmp/m1.sql
+git show origin/main:database/migration_provisioning_simplify.sql > /tmp/m2.sql
+mysql -u <DB_USER> -p <DB_NAME> < /tmp/m1.sql
+mysql -u <DB_USER> -p <DB_NAME> < /tmp/m2.sql
 ```
 
-(`DB_USER` / `DB_NAME` are in `.env`.) If it stops at `CREATE OR REPLACE VIEW`
-with a privilege error, the DB user lacks `CREATE VIEW`: grant it in the
-hosting panel and re-run just that statement. Everything else works without
-the view; the admin page says so instead of failing.
+Both, in that order. The first builds the table; the second takes
+provisioning back off `companies`, because companies are CUSTOMERS and the
+vendor is a different thing. (Or paste each file into phpMyAdmin -> SQL.)
 
----
+If the first stops at `CREATE OR REPLACE VIEW` with a privilege error, the DB
+user lacks `CREATE VIEW`: grant it in the hosting panel and re-run that one
+statement. Everything else works without the view; the admin page says so
+rather than failing.
 
 ## 5. Server: pull the code
 
@@ -132,23 +136,32 @@ and pass its path: `php tools/grant_pubkey.php /tmp/license_key.h` → `MATCH`.
 
 ---
 
-## 7. Server: give a company a key
+## 7. Server: switch provisioning on
 
-The company must exist (admin → Companies). Then:
+One vendor - us - so there is no vendor table and nothing to create. Three
+lines in `.env`:
 
 ```bash
-php tools/set_provision_key.php POYAN --quota 100 --prefix A2
+cd /home/sgkk4203/public_html/orca_backend
+cat >> .env <<'EOF'
+PROVISION_KEY=9785d4e5557edd6b31b70281974d4ecf41d12d4561f2b2d03c82426424188aba
+PROVISION_SERIAL_PREFIX=A
+PROVISION_VENDOR_NAME=Almas Electronic
+EOF
 ```
 
-It prints the key **once**. That string goes into the vendor's Orca and
-nowhere else. `--quota` is how many devices they may provision (omit for
-unlimited); `--prefix` is the serial range the server allocates from
-(`A2` → `A2000001`, `A2000002`, …). Rotate later with the same command; revoke
-with `--revoke`.
+`PROVISION_KEY` must be the value Orca ships with (`provision.py`,
+`DEFAULT_KEY`) - that is the whole handshake. It is not a strong secret,
+because the tool carries it; what it does is stop the endpoint answering the
+open internet. Leave it empty and provisioning is off: the API answers 503
+and says so.
 
-For a first try, make a `TEST` company with `--quota 3 --prefix T9`.
+`PROVISION_SERIAL_PREFIX=A` gives `A0000001`, `A0000002` ... - the shape every
+existing serial already has. The next number is derived from the highest one
+issued, so there is no counter to keep in step.
 
----
+When there is a second vendor, this is the point that grows a `vendors`
+table; the rows written until then all belong to vendor "us".
 
 ## 8. Prove it end to end
 
@@ -162,21 +175,23 @@ curl -s -H "Authorization: Bearer <KEY>" \
 Expect `"success":true` … `"signer_ready":true`. If `signer_ready` is false,
 the error text says which of steps 2, 3 or 6 to revisit.
 
-A real provision, against the TEST company, with the dev board's UID:
+A real provision, with the dev board's UID:
 
 ```bash
-curl -s -X POST -H "Authorization: Bearer <KEY>" -H "Content-Type: application/json" \
+curl -s -X POST -H "Authorization: Bearer $PROVISION_KEY" -H "Content-Type: application/json" \
   -d '{"uid":"203530473932501800370043","tool":"curl"}' \
   https://myco-grid.com/orca_backend/api/provision.php
 ```
 
 Expect `201`, a `serial_number`, and a 168-character `grant`. Run it a second
-time: `200`, the **same** serial and grant, `"reissued":true`, quota unchanged.
+time: `200`, the **same** serial and grant, `"reissued":true`, and the count
+unchanged.
 That second run is the whole idempotency guarantee, so it is worth seeing once.
 
-Then on a board: `license <grant>` → `Licence installed. Serial: T9000001`.
+Then on a board: `license <grant>` → `Licence installed. Serial: A0000001`.
 
-Admin → Provisioning shows the row, the timestamp, and TEST at 1 of 3.
+Admin → Provisioning shows the row and its timestamp, and the count goes up
+by one.
 
 ---
 
@@ -187,6 +202,6 @@ Admin → Provisioning shows the row, the timestamp, and TEST at 1 of 3.
 | `signer_ready: false`, "not readable" | step 3: path and `chmod`, `.env` line |
 | `signer_ready: false`, "openssl" | step 2: web PHP vs CLI PHP |
 | every grant refused on the board | step 6: `grant_pubkey.php` vs `license_key.h` — a different key |
-| `401` from the API | the Bearer key; `api/.htaccess` passes the header through, confirmed on this host |
+| `401` from the API | `PROVISION_KEY` in `.env` must equal Orca's built-in key; `api/.htaccess` passes the header through, confirmed on this host |
 | admin page warns about the view | step 4: `CREATE VIEW` privilege |
-| `402 QUOTA_EXCEEDED` | intended; raise with `set_provision_key.php CODE --keep --quota N` |
+| `503 NOT_CONFIGURED` | step 7: `PROVISION_KEY` missing from `.env` |
