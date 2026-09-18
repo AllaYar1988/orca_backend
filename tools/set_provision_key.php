@@ -11,6 +11,8 @@
  *   php set_provision_key.php POYAN --quota 100      ... and set a quota
  *   php set_provision_key.php POYAN --prefix A2      ... and a serial prefix
  *   php set_provision_key.php POYAN --revoke         no more provisioning
+ *   php set_provision_key.php POYAN --key <64 hex>   use THIS key, not a new one
+ *                                                    (the one built into Orca)
  *
  * Rotating invalidates the old key immediately; the vendor's Orca needs the
  * new one before its next provision. Quota and prefix can be changed without
@@ -35,6 +37,7 @@ $quota  = null; $setQuota = false;
 $prefix = null; $setPrefix = false;
 $keep   = false;
 $revoke = false;
+$given  = null;
 
 for ($i = 2; $i < $argc; $i++) {
     switch ($argv[$i]) {
@@ -42,12 +45,17 @@ for ($i = 2; $i < $argc; $i++) {
         case '--prefix': $prefix = strtoupper(trim($argv[++$i])); $setPrefix = true; break;
         case '--keep':   $keep = true; break;
         case '--revoke': $revoke = true; break;
+        case '--key':    $given = strtolower(trim($argv[++$i])); break;
         default:
             echo "Unknown option {$argv[$i]}\n";
             exit(1);
     }
 }
 
+if ($given !== null && !preg_match('/^[0-9a-f]{64}$/', $given)) {
+    echo "Error: --key must be 64 hex characters\n";
+    exit(1);
+}
 if ($setPrefix && !preg_match('/^[A-Z0-9]{1,7}$/', $prefix)) {
     echo "Error: prefix must be 1-7 letters/digits (serials are 8 characters in all)\n";
     exit(1);
@@ -71,7 +79,7 @@ try {
     if ($revoke) {
         $sets[] = "provision_key = NULL";
     } elseif (!$keep) {
-        $newKey = bin2hex(random_bytes(32));
+        $newKey = $given !== null ? $given : bin2hex(random_bytes(32));
         $sets[] = "provision_key = :key";
         $params[':key'] = $newKey;
     }
