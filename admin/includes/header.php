@@ -256,6 +256,10 @@ $currentUser = getCurrentUser();
                 <i class="bi bi-diagram-3"></i>
                 Virtual Devices
             </a>
+            <a href="provisions.php" class="nav-link <?php echo ($currentPage ?? '') === 'provisions' ? 'active' : ''; ?>">
+                <i class="bi bi-key"></i>
+                Provisioning
+            </a>
 
             <div class="nav-section">Users</div>
             <a href="user_create.php" class="nav-link <?php echo ($currentPage ?? '') === 'user_create' ? 'active' : ''; ?>">

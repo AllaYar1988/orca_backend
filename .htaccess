@@ -3,7 +3,7 @@
 RewriteEngine On
 
 # Security: Deny access to sensitive files
-<FilesMatch "^\.env|\.gitignore|composer\.json|composer\.lock">
+<FilesMatch "^\.env|\.gitignore|composer\.json|composer\.lock|\.pem$">
     Order allow,deny
     Deny from all
 </FilesMatch>

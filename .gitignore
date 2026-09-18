@@ -21,3 +21,7 @@ Thumbs.db
 # Temporary files
 *.tmp
 *.swp
+
+# Grant signing key - lives OUTSIDE the web root, never in git
+*.pem
+grant_key.pem
