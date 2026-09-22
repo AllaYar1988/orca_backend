@@ -4,6 +4,7 @@ $currentPage = 'provisions';
 
 require_once __DIR__ . '/../models/Provision.php';
 require_once __DIR__ . '/../services/GrantSigner.php';
+require_once __DIR__ . '/../services/TestSerials.php';
 
 $provModel    = new Provision();
 
@@ -26,10 +27,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['retire_id'])) {
 // whatever chip held it before. Does not count against quota - the serial
 // was already paid for.
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['replace_serial'])) {
-    $serial = trim($_POST['replace_serial']);
+    $serial = strtoupper(trim($_POST['replace_serial']));
     $uid    = strtoupper(trim($_POST['replace_uid'] ?? ''));
     $old    = $provModel->findLiveBySerial($serial);
-    if (!$old) {
+    if (TestSerials::isTest($serial)) {
+        // A test serial is on many chips: there is no "the" chip to retire.
+        // Provision the new board from Orca instead - it needs no replacing.
+        $flash = ['danger', htmlspecialchars($serial) . " is a test serial - it is shared, so there is nothing to replace. Provision the board from Orca."];
+    } elseif (!$old) {
         $flash = ['danger', "No live grant holds serial " . htmlspecialchars($serial)];
     } elseif (!GrantSigner::isValidUid($uid)) {
         $flash = ['danger', "New UID must be 24 hex characters"];
@@ -79,6 +84,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['replace_serial'])) {
 
 $search     = $_GET['search'] ?? '';
 $liveFilter = $_GET['live'] ?? '';
+$testFilter = $_GET['test'] ?? '';
 $page   = max(1, (int)($_GET['page'] ?? 1));
 $limit  = 25;
 $offset = ($page - 1) * $limit;
@@ -90,12 +96,18 @@ if ($search) {
 if ($liveFilter !== '') {
     $filters['live'] = (int)$liveFilter;
 }
+if ($testFilter !== '') {
+    $filters['test'] = (int)$testFilter;
+}
 
 $rows       = $provModel->getAll($filters);
 // What each listed chip used to be called. One query for the page, not one
 // per row - and it is the whole point of keeping the history.
 $wasNamed = $provModel->previousSerials(array_column($rows, 'uid'));
 $changes  = $provModel->recentChanges(15);
+// The ten test serials and how many chips hold each - the bench's boards.
+$testSerials = TestSerials::all();
+$testChips   = $provModel->liveChipCounts($testSerials);
 $totalCount = $provModel->count($filters);
 $totalPages = ceil($totalCount / $limit);
 
@@ -144,13 +156,14 @@ include 'includes/header.php';
 <div class="row mb-4">
   <?php
     $cards = [
-      ['Devices provisioned', $stats['live'],       'bi-cpu',          'primary', 'live grants - one per chip'],
+      ['Devices provisioned', $stats['live'],       'bi-cpu',          'primary', 'live grants - one per chip, test boards not counted'],
       ['This month',          $stats['this_month'], 'bi-calendar-plus','success', 'issued since the 1st'],
+      ['Test boards',         $stats['test'],       'bi-wrench',       'info',    'chips on a reserved test serial - not devices'],
       ['Re-issues',           $stats['reissues'],   'bi-arrow-repeat', 'secondary','re-flashes and wiped configs - free'],
       ['Retired',             $stats['retired'],    'bi-x-circle',     'warning', 'chips replaced'],
     ];
     foreach ($cards as $c): ?>
-    <div class="col-6 col-lg-3">
+    <div class="col-6 col-lg">
       <div class="card h-100">
         <div class="card-body">
           <div class="d-flex justify-content-between align-items-start">
@@ -176,12 +189,38 @@ include 'includes/header.php';
         <span class="text-danger">not available</span>
       <?php endif; ?>
     </span>
-    <span class="text-muted">Serial prefix and the provisioning key live in <code>.env</code>
-      (<code>PROVISION_SERIAL_PREFIX</code>, <code>PROVISION_KEY</code>).</span>
+    <span class="text-muted">Serial prefix, the provisioning key and the test serials live in <code>.env</code>
+      (<code>PROVISION_SERIAL_PREFIX</code>, <code>PROVISION_KEY</code>, <code>PROVISION_TEST_SERIALS</code>).</span>
     <?php if ($stats['last_issued_at']): ?>
       <span class="text-muted">Last issued <?php echo date('Y-m-d H:i', strtotime($stats['last_issued_at'])); ?></span>
     <?php endif; ?>
   </div>
+</div>
+
+<!-- Test serials -->
+<div class="card mb-4">
+    <div class="card-header d-flex justify-content-between align-items-center">
+        <h5 class="mb-0"><i class="bi bi-wrench"></i> Test serials</h5>
+        <span class="text-muted small">shared on purpose - a test board is not a device</span>
+    </div>
+    <div class="card-body py-2">
+        <div class="d-flex flex-wrap gap-2">
+        <?php foreach ($testSerials as $ts): $n = $testChips[$ts] ?? 0; ?>
+            <a href="provisions.php?search=<?php echo urlencode($ts); ?>&live=1"
+               class="btn btn-sm <?php echo $n ? 'btn-outline-info' : 'btn-outline-secondary'; ?> font-monospace"
+               title="<?php echo $n; ?> chip<?php echo $n === 1 ? '' : 's'; ?> hold this serial now">
+                <?php echo htmlspecialchars($ts); ?>
+                <span class="badge <?php echo $n ? 'bg-info text-dark' : 'bg-secondary'; ?>"><?php echo $n; ?></span>
+            </a>
+        <?php endforeach; ?>
+        </div>
+    </div>
+    <div class="card-footer text-muted small">
+        Ten reserved serials for development and test. Any number of chips may hold the same one at once, each with its
+        own grant; none of them is in the device count. Tick <em>Test board</em> in Orca and it hands out the one that has
+        waited longest. A test board given a real serial later becomes a device at that moment - and a device renamed to a
+        test serial leaves the count, which is the one move that can lower it, so it shows in the changes below.
+    </div>
 </div>
 
 <!-- Serial changes -->
@@ -202,8 +241,15 @@ include 'includes/header.php';
                     <tr>
                         <td class="small text-muted"><?php echo date('Y-m-d H:i', strtotime($c['created_at'])); ?></td>
                         <td class="font-monospace small"><?php echo htmlspecialchars($c['uid']); ?></td>
-                        <td class="font-monospace"><?php echo htmlspecialchars($c['previous_serial']); ?></td>
-                        <td class="font-monospace fw-semibold"><?php echo htmlspecialchars($c['serial_number']); ?></td>
+                        <td class="font-monospace"><?php echo htmlspecialchars($c['previous_serial']); ?>
+                            <?php if (TestSerials::isTest($c['previous_serial'])): ?><span class="badge bg-info text-dark">test</span><?php endif; ?></td>
+                        <td class="font-monospace fw-semibold"><?php echo htmlspecialchars($c['serial_number']); ?>
+                            <?php if (TestSerials::isTest($c['serial_number'])): ?>
+                                <span class="badge bg-info text-dark">test</span>
+                                <?php if (!TestSerials::isTest($c['previous_serial'])): ?><span class="badge bg-warning text-dark" title="A device left the count here">left the count</span><?php endif; ?>
+                            <?php elseif (TestSerials::isTest($c['previous_serial'])): ?>
+                                <span class="badge bg-success" title="A test board became a device here">became a device</span>
+                            <?php endif; ?></td>
                         <td class="small text-muted"><?php echo htmlspecialchars($c['tool'] ?? '—'); ?></td>
                     </tr>
                 <?php endforeach; ?>
@@ -262,6 +308,13 @@ include 'includes/header.php';
                     <option value="0" <?php echo $liveFilter === '0' ? 'selected' : ''; ?>>Retired only</option>
                 </select>
             </div>
+            <div class="col-md-2">
+                <select name="test" class="form-select">
+                    <option value="">Devices and test</option>
+                    <option value="0" <?php echo $testFilter === '0' ? 'selected' : ''; ?>>Devices only</option>
+                    <option value="1" <?php echo $testFilter === '1' ? 'selected' : ''; ?>>Test boards only</option>
+                </select>
+            </div>
             <div class="col-md-3">
                 <button type="submit" class="btn btn-primary"><i class="bi bi-search"></i> Filter</button>
                 <a href="provisions.php" class="btn btn-outline-secondary">Clear</a>
@@ -290,6 +343,7 @@ include 'includes/header.php';
                     <tr class="<?php echo $r['retired_at'] ? 'table-secondary text-muted' : ''; ?>">
                         <td class="font-monospace">
                             <?php echo htmlspecialchars($r['serial_number']); ?>
+                            <?php if ($r['is_test']): ?><span class="badge bg-info text-dark" title="A reserved test serial - not a device, not counted">test</span><?php endif; ?>
                             <?php if ($r['retired_at']): ?><span class="badge bg-secondary">retired</span><?php endif; ?>
                         </td>
                         <td class="font-monospace small text-muted">
@@ -329,7 +383,7 @@ include 'includes/header.php';
             <ul class="pagination justify-content-center">
                 <?php for ($i = 1; $i <= $totalPages; $i++): ?>
                     <li class="page-item <?php echo $i === $page ? 'active' : ''; ?>">
-                        <a class="page-link" href="?page=<?php echo $i; ?>&search=<?php echo urlencode($search); ?>&live=<?php echo urlencode($liveFilter); ?>"><?php echo $i; ?></a>
+                        <a class="page-link" href="?page=<?php echo $i; ?>&search=<?php echo urlencode($search); ?>&live=<?php echo urlencode($liveFilter); ?>&test=<?php echo urlencode($testFilter); ?>"><?php echo $i; ?></a>
                     </li>
                 <?php endfor; ?>
             </ul>

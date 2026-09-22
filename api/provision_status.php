@@ -10,7 +10,8 @@
  *   "success": true,
  *   "vendor": "Almas Electronic",
  *   "serial_prefix": "A",
- *   "provisioned": 137,
+ *   "provisioned": 137,                          live devices, test boards excluded
+ *   "test_serials": ["A0010707", ...],           the reserved serials that are not devices
  *   "signer_ready": true
  * }
  *
@@ -22,6 +23,7 @@
 require_once __DIR__ . '/init.php';
 require_once __DIR__ . '/../models/Provision.php';
 require_once __DIR__ . '/../services/GrantSigner.php';
+require_once __DIR__ . '/../services/TestSerials.php';
 require_once __DIR__ . '/provision_auth.php';
 
 if ($_SERVER['REQUEST_METHOD'] !== 'GET') {
@@ -45,6 +47,7 @@ $out = [
     'vendor'        => $vendor['name'],
     'serial_prefix' => $vendor['serial_prefix'],
     'provisioned'   => $prov->countLive(),
+    'test_serials'  => TestSerials::all(),     // the reserved ten, for the tool to show
     'signer_ready'  => $signerReady,
 ];
 if ($signerError !== null) {
@@ -62,6 +65,7 @@ if ($uid !== '') {
         'known'         => true,
         'serial_number' => $row['serial_number'],
         'retired'       => $row['retired_at'] !== null,
+        'test'          => (bool)$row['is_test'],
     ] : ['known' => false];
 }
 

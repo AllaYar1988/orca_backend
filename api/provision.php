@@ -10,6 +10,7 @@
  * {
  *   "uid":          "203530473932501800370043",   required, 24 hex, as printed
  *   "serial":       "A0020707",                   optional - server allocates otherwise
+ *   "test":         false,                        optional - a test board: give it a test serial
  *   "tool":         "orca",                       optional, for the audit trail
  *   "tool_version": "1.4.0",
  *   "fw_version":   "V3.25.10"
@@ -22,9 +23,23 @@
  *   "grant":         "<168 base64 characters>",   -> device: license <grant>
  *   "reissued":      false,                       true = this chip was known
  *   "changed_from":  "A0000001",                  present when the serial was rewritten
+ *   "test":          false,                       true = a test serial, not a device
+ *   "substituted_for": "A0090907",                present when "test" was asked for but a
+ *                                                 real serial was typed: what was typed
  *   "vendor":        "Almas Electronic",
- *   "provisioned":   137                          live devices in total
+ *   "provisioned":   137                          live devices in total, test boards excluded
  * }
+ *
+ * TEST BOARDS
+ * Ten serials are reserved for development and test (TestSerials). They are
+ * not devices: a row carrying one is is_test, left out of "provisioned", and
+ * free to share its serial with any number of other chips - so the CONFLICT
+ * rule below does not apply to them. Whether a row is a test row follows
+ * from the serial alone, never from the "test" flag in the request. The flag
+ * only means "pick one for me": when it is set and the serial typed is not
+ * one of the ten (or is empty), the reply carries the reserved serial that
+ * has gone longest unused, and "substituted_for" says what was typed. A
+ * known chip already holding a test serial keeps it.
  *
  * WHAT THIS IS
  * The one place a device is counted. The firmware will not write a serial
@@ -69,6 +84,7 @@
 require_once __DIR__ . '/init.php';
 require_once __DIR__ . '/../models/Provision.php';
 require_once __DIR__ . '/../services/GrantSigner.php';
+require_once __DIR__ . '/../services/TestSerials.php';
 require_once __DIR__ . '/provision_auth.php';
 
 if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
@@ -88,6 +104,7 @@ $vendor = provisionAuthenticate();      // exits with 401/503 otherwise
 $data = getJsonInput();
 $uid  = strtoupper(trim((string)($data['uid'] ?? '')));
 $wantSerial  = isset($data['serial']) ? strtoupper(trim((string)$data['serial'])) : '';
+$testBoard   = !empty($data['test']);        // "pick a test serial for me"
 $tool        = substr(trim((string)($data['tool'] ?? '')), 0, 50) ?: null;
 $toolVersion = substr(trim((string)($data['tool_version'] ?? '')), 0, 50) ?: null;
 $fwVersion   = substr(trim((string)($data['fw_version'] ?? '')), 0, 50) ?: null;
@@ -110,11 +127,45 @@ try {
 $prov = new Provision();
 $db   = $prov->getConnection();
 
+// What the reply says about the serial it carries. Filled in once the serial
+// is settled; the same two keys on every success path.
+$substitutedFor = null;
+function testFields($serial, $substitutedFor) {
+    $f = ['test' => TestSerials::isTest($serial)];
+    if ($substitutedFor !== null && $substitutedFor !== '') {
+        $f['substituted_for'] = $substitutedFor;
+    }
+    return $f;
+}
+
 try {
     $db->beginTransaction();
 
-    // ---- a chip we have seen: replay ---------------------------------------
     $existing = $prov->findByUid($uid);
+
+    // ---- a test board: the serial is ours to choose ------------------------
+    // The flag never marks a row; the serial does (TestSerials). So when the
+    // flag is set and what was typed is not a reserved serial, swap it for
+    // one: the chip's own if it already holds a test serial, otherwise the
+    // reserved one that has waited longest.
+    if ($testBoard && !TestSerials::isTest($wantSerial)) {
+        $substitutedFor = $wantSerial;
+        if ($existing && $existing['retired_at'] === null
+                && TestSerials::isTest($existing['serial_number'])) {
+            $wantSerial = $existing['serial_number'];
+        } else {
+            $wantSerial = $prov->leastRecentlyUsedTestSerial();
+            if ($wantSerial === null) {
+                $db->rollBack();
+                provisionError('No test serials are configured on this server (PROVISION_TEST_SERIALS)',
+                               'NOT_CONFIGURED', 503);
+            }
+        }
+    }
+    // A reserved serial may be live on any number of chips at once.
+    $shared = TestSerials::isTest($wantSerial);
+
+    // ---- a chip we have seen: replay ---------------------------------------
     if ($existing) {
         if ($existing['retired_at'] !== null) {
             $db->rollBack();
@@ -123,7 +174,7 @@ try {
         }
         // A different serial: rewrite it, and keep a record of what it was.
         if ($wantSerial !== '' && $wantSerial !== $existing['serial_number']) {
-            $onOther = $prov->findLiveBySerial($wantSerial);
+            $onOther = $shared ? false : $prov->findLiveBySerial($wantSerial);
             if ($onOther && (int)$onOther['id'] !== (int)$existing['id']) {
                 $db->rollBack();
                 provisionError('Serial ' . $wantSerial . ' is already on chip ' . $onOther['uid'],
@@ -144,7 +195,7 @@ try {
                 'issued_utc'    => $issued,
                 'vendor'        => $vendor['name'],
                 'provisioned'   => $prov->countLive(),
-            ]);
+            ] + testFields($wantSerial, $substitutedFor));
         }
         if (!$signer->verifyBase64($existing['grant_b64'])) {
             // The stored grant no longer verifies against this server's key -
@@ -166,12 +217,12 @@ try {
             'issued_utc'    => (int)$existing['issued_utc'],
             'vendor'        => $vendor['name'],
             'provisioned'   => $prov->countLive(),
-        ]);
+        ] + testFields($existing['serial_number'], $substitutedFor));
     }
 
     // ---- a new chip --------------------------------------------------------
     if ($wantSerial !== '') {
-        if ($prov->findLiveBySerial($wantSerial)) {
+        if (!$shared && $prov->findLiveBySerial($wantSerial)) {
             $db->rollBack();
             provisionError('Serial ' . $wantSerial . ' is already on another chip', 'CONFLICT', 409);
         }
@@ -222,7 +273,7 @@ try {
         'issued_utc'    => $issued,
         'vendor'        => $vendor['name'],
         'provisioned'   => $prov->countLive(),
-    ], 201);
+    ] + testFields($serial, $substitutedFor), 201);
 
 } catch (Exception $e) {
     if ($db->inTransaction()) {

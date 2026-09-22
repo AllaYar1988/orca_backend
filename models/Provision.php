@@ -1,5 +1,6 @@
 <?php
 require_once __DIR__ . '/../config/database.php';
+require_once __DIR__ . '/../services/TestSerials.php';
 
 /**
  * Provision
@@ -13,7 +14,12 @@ require_once __DIR__ . '/../config/database.php';
  * The invariants the model keeps:
  *   - uid is unique: one row per chip, so a chip is one device however many
  *     times it is provisioned or renamed.
- *   - a serial is live on at most one chip.
+ *   - a serial is live on at most one chip - unless it is one of the reserved
+ *     test serials (TestSerials), which may be on any number. Rows carrying
+ *     one are is_test, and is_test is always derived from the serial at the
+ *     moment the row is written, never taken from the caller.
+ *   - test rows are not devices: countLive() and the live figures in stats()
+ *     leave them out.
  *   - allocation reads the highest serial FOR UPDATE, so two benches asking
  *     at once cannot be handed the same number.
  *   - every grant ever issued is written to provision_history before the row
@@ -54,11 +60,74 @@ class Provision {
     }
 
     /**
-     * Live grants in total - how many devices exist because of us.
+     * Live grants in total - how many devices exist because of us. Test
+     * boards are not devices and are not in this number.
      */
     public function countLive() {
         return (int)$this->db->query(
-            "SELECT COUNT(*) FROM {$this->table} WHERE retired_at IS NULL")->fetchColumn();
+            "SELECT COUNT(*) FROM {$this->table}
+             WHERE retired_at IS NULL AND is_test = 0")->fetchColumn();
+    }
+
+    /**
+     * How many live chips hold each of the given serials. Keyed by serial;
+     * a serial on no chip is absent. Only interesting for test serials,
+     * where the answer can be more than one.
+     */
+    public function liveChipCounts(array $serials) {
+        if (!$serials) {
+            return [];
+        }
+        $in = implode(',', array_fill(0, count($serials), '?'));
+        $stmt = $this->db->prepare(
+            "SELECT serial_number, COUNT(*) AS n FROM {$this->table}
+             WHERE retired_at IS NULL AND serial_number IN ($in)
+             GROUP BY serial_number");
+        $stmt->execute(array_map('strtoupper', $serials));
+        $out = [];
+        foreach ($stmt->fetchAll() as $r) {
+            $out[$r['serial_number']] = (int)$r['n'];
+        }
+        return $out;
+    }
+
+    /**
+     * The reserved test serial that has gone longest without being handed
+     * out. One never used at all wins outright.
+     *
+     * "Available" cannot mean "on no chip", because test serials are shared
+     * on purpose and all ten are always free. Spreading the bench's boards
+     * across the ten by age is the next best thing: the data on the portal
+     * does not all pile up under the first name in the list.
+     */
+    public function leastRecentlyUsedTestSerial() {
+        $serials = TestSerials::all();
+        if (!$serials) {
+            return null;
+        }
+        $in = implode(',', array_fill(0, count($serials), '?'));
+        $stmt = $this->db->prepare(
+            "SELECT serial_number,
+                    MAX(GREATEST(created_at, COALESCE(last_reissued_at, created_at))) AS last_used
+             FROM {$this->table}
+             WHERE serial_number IN ($in)
+             GROUP BY serial_number");
+        $stmt->execute($serials);
+        $lastUsed = [];
+        foreach ($stmt->fetchAll() as $r) {
+            $lastUsed[$r['serial_number']] = $r['last_used'];
+        }
+
+        $pick = null;
+        foreach ($serials as $s) {
+            if (!isset($lastUsed[$s])) {
+                return $s;                          // never used: take it
+            }
+            if ($pick === null || $lastUsed[$s] < $lastUsed[$pick]) {
+                $pick = $s;
+            }
+        }
+        return $pick;
     }
 
     /**
@@ -150,13 +219,19 @@ class Provision {
             'ip_address'      => $ip,
         ]);
 
+        // is_test follows the serial. This is how a test board becomes a
+        // device (given a real serial, the flag clears and it is counted) and
+        // how a device drops out of the count (renamed to a test serial - the
+        // only move that can lower the number, so history has it).
         $sql = "UPDATE {$this->table}
-                SET serial_number = :serial, grant_b64 = :grant, issued_utc = :issued,
+                SET serial_number = :serial, is_test = :is_test,
+                    grant_b64 = :grant, issued_utc = :issued,
                     tool = COALESCE(:tool, tool), ip_address = COALESCE(:ip, ip_address)
                 WHERE id = :id";
         $stmt = $this->db->prepare($sql);
         $stmt->execute([
-            ':serial' => $newSerial, ':grant' => $grantB64, ':issued' => $issuedUtc,
+            ':serial' => $newSerial, ':is_test' => TestSerials::isTest($newSerial) ? 1 : 0,
+            ':grant' => $grantB64, ':issued' => $issuedUtc,
             ':tool' => $tool, ':ip' => $ip, ':id' => $id,
         ]);
         return true;
@@ -208,16 +283,17 @@ class Provision {
      */
     public function create(array $d) {
         $sql = "INSERT INTO {$this->table}
-                (company_id, uid, serial_number, grant_b64, issued_utc,
+                (company_id, uid, serial_number, is_test, grant_b64, issued_utc,
                  tool, tool_version, fw_version, ip_address)
                 VALUES
-                (:company_id, :uid, :serial_number, :grant_b64, :issued_utc,
+                (:company_id, :uid, :serial_number, :is_test, :grant_b64, :issued_utc,
                  :tool, :tool_version, :fw_version, :ip_address)";
         $stmt = $this->db->prepare($sql);
         $stmt->execute([
             ':company_id'    => $d['company_id'] ?? null,
             ':uid'           => strtoupper($d['uid']),
             ':serial_number' => $d['serial_number'],
+            ':is_test'       => TestSerials::isTest($d['serial_number']) ? 1 : 0,
             ':grant_b64'     => $d['grant_b64'],
             ':issued_utc'    => $d['issued_utc'],
             ':tool'          => $d['tool'] ?? null,
@@ -282,6 +358,9 @@ class Provision {
         if (isset($filters['live'])) {
             $sql .= $filters['live'] ? " AND p.retired_at IS NULL" : " AND p.retired_at IS NOT NULL";
         }
+        if (isset($filters['test'])) {
+            $sql .= $filters['test'] ? " AND p.is_test = 1" : " AND p.is_test = 0";
+        }
 
         $sql .= " ORDER BY p.created_at DESC";
 
@@ -307,6 +386,9 @@ class Provision {
         if (isset($filters['live'])) {
             $sql .= $filters['live'] ? " AND p.retired_at IS NULL" : " AND p.retired_at IS NOT NULL";
         }
+        if (isset($filters['test'])) {
+            $sql .= $filters['test'] ? " AND p.is_test = 1" : " AND p.is_test = 0";
+        }
         $stmt = $this->db->prepare($sql);
         $stmt->execute($params);
         return (int)$stmt->fetchColumn();
@@ -314,19 +396,22 @@ class Provision {
 
     /**
      * The production numbers: how many devices exist, and how lately.
+     * `live` and `this_month` are devices - test boards are counted apart,
+     * in `test`, so the headline number is the one that means something.
      */
     public function stats() {
         $sql = "SELECT COUNT(*) AS total,
-                       SUM(retired_at IS NULL) AS live,
+                       SUM(retired_at IS NULL AND is_test = 0) AS live,
+                       SUM(retired_at IS NULL AND is_test = 1) AS test,
                        SUM(retired_at IS NOT NULL) AS retired,
-                       SUM(retired_at IS NULL
+                       SUM(retired_at IS NULL AND is_test = 0
                            AND created_at >= DATE_FORMAT(NOW(), '%Y-%m-01')) AS this_month,
                        SUM(reissue_count) AS reissues,
                        MIN(created_at) AS first_issued_at,
                        MAX(created_at) AS last_issued_at
                 FROM {$this->table}";
         $r = $this->db->query($sql)->fetch();
-        foreach (['total', 'live', 'retired', 'this_month', 'reissues'] as $k) {
+        foreach (['total', 'live', 'test', 'retired', 'this_month', 'reissues'] as $k) {
             $r[$k] = (int)$r[$k];
         }
         return $r;
