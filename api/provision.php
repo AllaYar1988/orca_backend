@@ -11,6 +11,7 @@
  *   "uid":          "203530473932501800370043",   required, 24 hex, as printed
  *   "serial":       "A0020707",                   optional - server allocates otherwise
  *   "test":         false,                        optional - a test board: give it a test serial
+ *   "replace":      false,                        optional - the serial is on another chip: move it here
  *   "tool":         "orca",                       optional, for the audit trail
  *   "tool_version": "1.4.0",
  *   "fw_version":   "V3.25.10"
@@ -26,9 +27,23 @@
  *   "test":          false,                       true = a test serial, not a device
  *   "substituted_for": "A0090907",                present when "test" was asked for but a
  *                                                 real serial was typed: what was typed
+ *   "replaced_chip": "2035...0043",               present when the serial was moved here from
+ *                                                 that chip, which is now retired
  *   "vendor":        "Almas Electronic",
  *   "provisioned":   137                          live devices in total, test boards excluded
  * }
+ *
+ * A 409 CONFLICT carries what the bench needs to decide whether to move the
+ * serial: "on_chip" (the chip holding it), "on_chip_since" (when it got it)
+ * and "last_seen_at" / "last_seen_ago_s" (when a device with that serial last
+ * reported to this server, null if never). A dead board does not phone home.
+ *
+ * MOVING A SERIAL
+ * Ask again with "replace": true and the serial moves: this chip gets a
+ * grant for it - a fresh row, or its existing row renamed - and the chip
+ * that held it is retired. It is the one action here that retires a chip,
+ * so it is never the default, and the tool asks the operator first, naming
+ * both chips. A retire by mistake is undone on the admin page (Restore).
  *
  * TEST BOARDS
  * Ten serials are reserved for development and test (TestSerials). They are
@@ -69,7 +84,7 @@
  * does not move: same chip, same row.
  *
  * A chip whose grant was RETIRED (the MCU was replaced) is still 410 - that
- * is a different physical board, and the admin issues for it deliberately.
+ * is a different physical board, and only an admin can bring it back.
  *
  * Errors carry a stable "code" so the tool can act on it rather than parse
  * the message:
@@ -77,6 +92,8 @@
  *   401 UNAUTHORIZED    no or wrong provision key
  *   503 NOT_CONFIGURED  PROVISION_KEY is not set in .env
  *   409 CONFLICT        the serial asked for is live on a different chip
+ *                       (ask again with "replace": true to move it here)
+ *   409 TEST_SERIAL     "replace" named a test serial - nothing to move
  *   410 RETIRED         chip replaced; grant retired
  *   500 SIGNER          key not loaded - see GRANT_PRIVATE_KEY_PATH
  */
@@ -105,6 +122,7 @@ $data = getJsonInput();
 $uid  = strtoupper(trim((string)($data['uid'] ?? '')));
 $wantSerial  = isset($data['serial']) ? strtoupper(trim((string)$data['serial'])) : '';
 $testBoard   = !empty($data['test']);        // "pick a test serial for me"
+$replace     = !empty($data['replace']);     // "the serial is on another chip: move it here"
 $tool        = substr(trim((string)($data['tool'] ?? '')), 0, 50) ?: null;
 $toolVersion = substr(trim((string)($data['tool_version'] ?? '')), 0, 50) ?: null;
 $fwVersion   = substr(trim((string)($data['fw_version'] ?? '')), 0, 50) ?: null;
@@ -138,10 +156,55 @@ function testFields($serial, $substitutedFor) {
     return $f;
 }
 
+// The serial is live on another chip. Say which, and when a device with
+// that serial was last heard from - the bench decides from that whether
+// the other board is dead, and asks again with "replace" if it is.
+function conflictReply(Provision $prov, $serial, array $holder) {
+    $seen = $prov->lastSeen($serial);
+    jsonResponse([
+        'success'         => false,
+        'code'            => 'CONFLICT',
+        'error'           => 'Serial ' . $serial . ' is already on chip ' . $holder['uid'],
+        'on_chip'         => $holder['uid'],
+        'on_chip_since'   => (int)$holder['issued_utc'],
+        'last_seen_at'    => $seen,
+        'last_seen_ago_s' => $seen ? max(0, time() - strtotime($seen)) : null,
+    ], 409);
+}
+
 try {
     $db->beginTransaction();
 
     $existing = $prov->findByUid($uid);
+
+    // ---- moving a serial here from another chip: only when asked ----------
+    if ($replace && $wantSerial !== '' && !$testBoard) {
+        $holder = $prov->findLiveBySerial($wantSerial);
+        if ($holder && $holder['uid'] !== $uid) {
+            try {
+                $moved = $prov->replaceChip($wantSerial, $uid, $signer, $tool, $ip);
+            } catch (ProvisionRefused $e) {
+                $db->rollBack();
+                provisionError($e->getMessage(), $e->apiCode, $e->http);
+            }
+            $db->commit();
+            $out = [
+                'success'       => true,
+                'serial_number' => $wantSerial,
+                'grant'         => $moved['grant'],
+                'reissued'      => $existing ? true : false,
+                'replaced_chip' => $moved['old_uid'],
+                'issued_utc'    => $moved['issued'],
+                'vendor'        => $vendor['name'],
+                'provisioned'   => $prov->countLive(),
+            ];
+            if ($moved['previous_serial'] !== null) {
+                $out['changed_from'] = $moved['previous_serial'];
+            }
+            jsonResponse($out + testFields($wantSerial, null), $existing ? 200 : 201);
+        }
+        // Nobody else holds it (or this chip does): the ordinary path applies.
+    }
 
     // ---- a test board: the serial is ours to choose ------------------------
     // The flag never marks a row; the serial does (TestSerials). So when the
@@ -177,8 +240,7 @@ try {
             $onOther = $shared ? false : $prov->findLiveBySerial($wantSerial);
             if ($onOther && (int)$onOther['id'] !== (int)$existing['id']) {
                 $db->rollBack();
-                provisionError('Serial ' . $wantSerial . ' is already on chip ' . $onOther['uid'],
-                               'CONFLICT', 409);
+                conflictReply($prov, $wantSerial, $onOther);
             }
 
             $issued = time();
@@ -222,9 +284,10 @@ try {
 
     // ---- a new chip --------------------------------------------------------
     if ($wantSerial !== '') {
-        if (!$shared && $prov->findLiveBySerial($wantSerial)) {
+        $onOther = $shared ? false : $prov->findLiveBySerial($wantSerial);
+        if ($onOther) {
             $db->rollBack();
-            provisionError('Serial ' . $wantSerial . ' is already on another chip', 'CONFLICT', 409);
+            conflictReply($prov, $wantSerial, $onOther);
         }
         $serial = $wantSerial;
     } else {

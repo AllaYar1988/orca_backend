@@ -3,6 +3,20 @@ require_once __DIR__ . '/../config/database.php';
 require_once __DIR__ . '/../services/TestSerials.php';
 
 /**
+ * A refusal the caller can name. The API turns $apiCode into its JSON
+ * "code" and $http into the status; the admin page shows the message.
+ */
+class ProvisionRefused extends RuntimeException {
+    public $apiCode;
+    public $http;
+    public function __construct($apiCode, $message, $http = 409) {
+        parent::__construct($message);
+        $this->apiCode = $apiCode;
+        $this->http    = $http;
+    }
+}
+
+/**
  * Provision
  *
  * One row per chip, ever. The record of every grant this server issued.
@@ -325,16 +339,157 @@ class Provision {
 
     /**
      * MCU replaced: retire this chip's grant so its serial can be issued to
-     * the new chip. Admin action, never automatic - "my MCU broke" must not
-     * become a free-device button.
+     * the new chip. Never automatic - "my MCU broke" must not become a
+     * free-device button - so it happens only through replaceChip(), which
+     * asks, or the admin page.
      */
-    public function retire($id, $replacedBy = null) {
+    public function retire($id, $replacedBy = null, $tool = null, $ip = null) {
+        $row = $this->getById($id);
+        if (!$row || $row['retired_at'] !== null) {
+            return false;
+        }
+        $this->logHistory([
+            'provision_id'  => $id,
+            'uid'           => $row['uid'],
+            'serial_number' => $row['serial_number'],
+            'grant_b64'     => $row['grant_b64'],
+            'issued_utc'    => $row['issued_utc'],
+            'event'         => 'retired',
+            'tool'          => $tool,
+            'ip_address'    => $ip,
+        ]);
         $sql = "UPDATE {$this->table}
                 SET retired_at = NOW(), replaced_by = :rb
                 WHERE id = :id AND retired_at IS NULL";
         $stmt = $this->db->prepare($sql);
         $stmt->execute([':id' => $id, ':rb' => $replacedBy]);
         return $stmt->rowCount() > 0;
+    }
+
+    /**
+     * Undo a retire. A retire by mistake is one wrong flag in one row, not a
+     * broken board - the grant in the board's flash never stopped working -
+     * so the way back should be a button, not a database session.
+     *
+     * Refused when the serial has since gone live on another chip: two live
+     * rows with one serial is the one state nothing else here can handle.
+     */
+    public function restore($id, $tool = null, $ip = null) {
+        $row = $this->getById($id);
+        if (!$row) {
+            throw new ProvisionRefused('NOT_FOUND', 'No such grant', 404);
+        }
+        if ($row['retired_at'] === null) {
+            throw new ProvisionRefused('NOT_RETIRED', 'Grant for ' . $row['serial_number'] . ' is not retired', 409);
+        }
+        $holder = $this->findLiveBySerial($row['serial_number']);
+        if ($holder && !TestSerials::isTest($row['serial_number'])) {
+            throw new ProvisionRefused('CONFLICT',
+                'Serial ' . $row['serial_number'] . ' is now live on chip ' . $holder['uid']
+                . ' - retire or rename that chip first', 409);
+        }
+        $this->logHistory([
+            'provision_id'  => $id,
+            'uid'           => $row['uid'],
+            'serial_number' => $row['serial_number'],
+            'grant_b64'     => $row['grant_b64'],
+            'issued_utc'    => $row['issued_utc'],
+            'event'         => 'unretired',
+            'tool'          => $tool,
+            'ip_address'    => $ip,
+        ]);
+        $stmt = $this->db->prepare(
+            "UPDATE {$this->table} SET retired_at = NULL, replaced_by = NULL WHERE id = :id");
+        $stmt->execute([':id' => $id]);
+        return true;
+    }
+
+    /**
+     * Move a live serial onto another chip. The new chip gets a grant for it
+     * - a fresh row, or its existing row renamed - and the chip that held it
+     * is retired, pointing at its replacement.
+     *
+     * The one action that lets a serial move, and there is exactly one copy
+     * of it: the admin page and the API both call this. Call inside a
+     * transaction. Throws ProvisionRefused with a code the API can pass on.
+     *
+     * Returns ['id', 'grant', 'issued', 'old_uid', 'previous_serial'].
+     */
+    public function replaceChip($serial, $newUid, $signer, $tool = null, $ip = null) {
+        $serial = strtoupper(trim($serial));
+        $newUid = strtoupper(trim($newUid));
+
+        if (TestSerials::isTest($serial)) {
+            throw new ProvisionRefused('TEST_SERIAL',
+                $serial . ' is a test serial - it is shared, so there is nothing to replace; provision the board from Orca', 409);
+        }
+        $old = $this->findLiveBySerial($serial);
+        if (!$old) {
+            throw new ProvisionRefused('NOT_LIVE', 'No live grant holds serial ' . $serial, 404);
+        }
+        if ($old['uid'] === $newUid) {
+            throw new ProvisionRefused('SAME_CHIP', 'Chip ' . $newUid . ' already holds ' . $serial, 409);
+        }
+        $new = $this->findByUid($newUid);
+        if ($new && $new['retired_at'] !== null) {
+            throw new ProvisionRefused('RETIRED', 'Chip ' . $newUid . ' is retired - restore it first', 410);
+        }
+
+        $issued = time();
+        $grant  = $signer->signBase64($newUid, $serial, 0, $issued);
+
+        if ($new) {
+            // A chip we know - a bench board, most likely - takes the serial
+            // in place of whatever it was called. is_test clears with it.
+            $previous = $new['serial_number'];
+            $newId    = $new['id'];
+            $stmt = $this->db->prepare(
+                "UPDATE {$this->table}
+                 SET serial_number = :serial, is_test = 0, grant_b64 = :grant, issued_utc = :issued,
+                     tool = COALESCE(:tool, tool), ip_address = COALESCE(:ip, ip_address)
+                 WHERE id = :id");
+            $stmt->execute([':serial' => $serial, ':grant' => $grant, ':issued' => $issued,
+                            ':tool' => $tool, ':ip' => $ip, ':id' => $newId]);
+        } else {
+            $previous = null;
+            $newId    = $this->create([
+                'uid'           => $newUid,
+                'serial_number' => $serial,
+                'grant_b64'     => $grant,
+                'issued_utc'    => $issued,
+                'tool'          => $tool,
+                'ip_address'    => $ip,
+            ]);
+        }
+        $this->logHistory([
+            'provision_id'    => $newId,
+            'uid'             => $newUid,
+            'serial_number'   => $serial,
+            'previous_serial' => $previous,
+            'grant_b64'       => $grant,
+            'issued_utc'      => $issued,
+            'event'           => 'replaced_chip',
+            'tool'            => $tool,
+            'ip_address'      => $ip,
+        ]);
+        $this->retire($old['id'], $newId, $tool, $ip);
+
+        return ['id' => $newId, 'grant' => $grant, 'issued' => $issued,
+                'old_uid' => $old['uid'], 'previous_serial' => $previous];
+    }
+
+    /**
+     * When a device with this serial last reported to this server, or null
+     * if never. The fact that settles whether a board is dead: a dead board
+     * does not phone home.
+     */
+    public function lastSeen($serial) {
+        $stmt = $this->db->prepare(
+            "SELECT last_seen_at FROM devices WHERE serial_number = :s
+             ORDER BY last_seen_at DESC LIMIT 1");
+        $stmt->execute([':s' => $serial]);
+        $v = $stmt->fetchColumn();
+        return $v ?: null;
     }
 
     public function getById($id) {

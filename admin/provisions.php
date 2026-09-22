@@ -12,67 +12,63 @@ $provModel    = new Provision();
 
 $flash = null;
 
-// Retire a chip's grant (MCU replaced). Deliberate, admin-only: this is the
-// one action that lets a serial move to another chip.
+$adminIp = $_SERVER['REMOTE_ADDR'] ?? null;
+
+// Retire a chip's grant (MCU replaced), without naming a replacement.
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['retire_id'])) {
     $row = $provModel->getById((int)$_POST['retire_id']);
     if ($row && $row['retired_at'] === null) {
-        $provModel->retire($row['id']);
+        $provModel->retire($row['id'], null, 'admin', $adminIp);
         header('Location: provisions.php?retired=' . urlencode($row['serial_number']));
         exit;
     }
 }
 
-// Issue a grant for a replacement chip, carrying an existing serial. Retires
-// whatever chip held it before. Does not count against quota - the serial
-// was already paid for.
+// Undo a retire. Refused if the serial has since gone live elsewhere.
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['restore_id'])) {
+    $row = $provModel->getById((int)$_POST['restore_id']);
+    if ($row) {
+        $db = $provModel->getConnection();
+        try {
+            $db->beginTransaction();
+            $provModel->restore($row['id'], 'admin', $adminIp);
+            $db->commit();
+            header('Location: provisions.php?restored=' . urlencode($row['serial_number']) . '&search=' . urlencode($row['uid']));
+            exit;
+        } catch (ProvisionRefused $e) {
+            if ($db->inTransaction()) {
+                $db->rollBack();
+            }
+            $flash = ['danger', 'Not restored: ' . htmlspecialchars($e->getMessage())];
+        }
+    }
+}
+
+// Move a serial onto another chip: the new chip gets the grant (a fresh row,
+// or its existing row renamed), the old chip is retired. One method,
+// Provision::replaceChip(), shared with the API - Orca asks the same thing
+// from the bench when the server answers CONFLICT.
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['replace_serial'])) {
     $serial = strtoupper(trim($_POST['replace_serial']));
     $uid    = strtoupper(trim($_POST['replace_uid'] ?? ''));
-    $old    = $provModel->findLiveBySerial($serial);
-    if (TestSerials::isTest($serial)) {
-        // A test serial is on many chips: there is no "the" chip to retire.
-        // Provision the new board from Orca instead - it needs no replacing.
-        $flash = ['danger', htmlspecialchars($serial) . " is a test serial - it is shared, so there is nothing to replace. Provision the board from Orca."];
-    } elseif (!$old) {
-        $flash = ['danger', "No live grant holds serial " . htmlspecialchars($serial)];
-    } elseif (!GrantSigner::isValidUid($uid)) {
+    if (!GrantSigner::isValidUid($uid)) {
         $flash = ['danger', "New UID must be 24 hex characters"];
-    } elseif ($provModel->findByUid($uid)) {
-        $flash = ['danger', "Chip $uid is already provisioned"];
     } else {
+        $db = $provModel->getConnection();
         try {
             $signer = new GrantSigner();
-            $db = $provModel->getConnection();
             $db->beginTransaction();
-            $issued = time();
-            $grant  = $signer->signBase64($uid, $serial, (int)$old['company_id'], $issued);
-            $newId  = $provModel->create([
-                'company_id'    => $old['company_id'],
-                'uid'           => $uid,
-                'serial_number' => $serial,
-                'grant_b64'     => $grant,
-                'issued_utc'    => $issued,
-                'tool'          => 'admin',
-                'ip_address'    => $_SERVER['REMOTE_ADDR'] ?? null,
-            ]);
-            $provModel->logHistory([
-                'provision_id'    => $newId,
-                'uid'             => $uid,
-                'serial_number'   => $serial,
-                'previous_serial' => null,
-                'grant_b64'       => $grant,
-                'issued_utc'      => $issued,
-                'event'           => 'replaced_chip',
-                'tool'            => 'admin',
-                'ip_address'      => $_SERVER['REMOTE_ADDR'] ?? null,
-            ]);
-            $provModel->retire($old['id'], $newId);
+            $provModel->replaceChip($serial, $uid, $signer, 'admin', $adminIp);
             $db->commit();
             header('Location: provisions.php?replaced=' . urlencode($serial) . '&search=' . urlencode($uid));
             exit;
+        } catch (ProvisionRefused $e) {
+            if ($db->inTransaction()) {
+                $db->rollBack();
+            }
+            $flash = ['danger', 'Not replaced: ' . htmlspecialchars($e->getMessage())];
         } catch (Exception $e) {
-            if (isset($db) && $db->inTransaction()) {
+            if ($db->inTransaction()) {
                 $db->rollBack();
             }
             $flash = ['danger', 'Replacement failed: ' . htmlspecialchars($e->getMessage())];
@@ -129,6 +125,12 @@ include 'includes/header.php';
 <?php if (isset($_GET['retired'])): ?>
 <div class="alert alert-warning alert-dismissible fade show" role="alert">
     Grant for serial <strong><?php echo htmlspecialchars($_GET['retired']); ?></strong> retired. That chip can no longer be re-provisioned; issue for the replacement below.
+    <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+</div>
+<?php endif; ?>
+<?php if (isset($_GET['restored'])): ?>
+<div class="alert alert-success alert-dismissible fade show" role="alert">
+    Grant for serial <strong><?php echo htmlspecialchars($_GET['restored']); ?></strong> restored. That chip can be provisioned again; the grant in its flash never stopped working.
     <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
 </div>
 <?php endif; ?>
@@ -285,7 +287,8 @@ include 'includes/header.php';
             </div>
         </form>
         <div class="form-text mt-2">
-            For a repaired board with a new MCU. The old chip's grant is retired, the serial is signed to the new UID, and the company's quota is untouched. Deliberately not something Orca can do on its own.
+            For a repaired board with a new MCU. The old chip's grant is retired and the serial is signed to the new UID - a chip that is already provisioned is renamed onto it. The device count does not move.
+            Orca offers the same move from the bench when the server refuses a serial as CONFLICT: it names both chips and when that serial last reported in, and asks. A retire by mistake is undone with <i class="bi bi-arrow-counterclockwise"></i> on the retired row.
         </div>
     </div>
 </div>
@@ -366,9 +369,14 @@ include 'includes/header.php';
                         </td>
                         <td class="text-end">
                             <?php if (!$r['retired_at']): ?>
-                            <form method="POST" class="d-inline" onsubmit="return confirm('Retire the grant for <?php echo htmlspecialchars($r['serial_number']); ?>? The chip <?php echo htmlspecialchars($r['uid']); ?> can then never be re-provisioned.');">
+                            <form method="POST" class="d-inline" onsubmit="return confirm('Retire the grant for <?php echo htmlspecialchars($r['serial_number']); ?>? The chip <?php echo htmlspecialchars($r['uid']); ?> cannot be provisioned again until it is restored.');">
                                 <input type="hidden" name="retire_id" value="<?php echo $r['id']; ?>">
                                 <button type="submit" class="btn btn-sm btn-outline-danger" title="Retire (MCU replaced)"><i class="bi bi-x-circle"></i></button>
+                            </form>
+                            <?php else: ?>
+                            <form method="POST" class="d-inline" onsubmit="return confirm('Restore the grant for <?php echo htmlspecialchars($r['serial_number']); ?> on chip <?php echo htmlspecialchars($r['uid']); ?>? It can then be provisioned again.');">
+                                <input type="hidden" name="restore_id" value="<?php echo $r['id']; ?>">
+                                <button type="submit" class="btn btn-sm btn-outline-success" title="Restore - undo the retire"><i class="bi bi-arrow-counterclockwise"></i></button>
                             </form>
                             <?php endif; ?>
                         </td>
