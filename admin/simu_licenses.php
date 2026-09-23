@@ -270,23 +270,6 @@ include 'includes/header.php';
   <?php endforeach; ?>
 </div>
 
-<div class="card mb-4">
-  <div class="card-body py-2 d-flex flex-wrap gap-4 align-items-center small">
-    <span><i class="bi bi-key"></i> Signing key:
-      <?php if ($signerState === 'ok'): ?>
-        <span class="text-success">ready</span> <code><?php echo htmlspecialchars($signerNote); ?></code>
-      <?php else: ?>
-        <span class="text-danger">not available</span>
-      <?php endif; ?>
-    </span>
-    <span><i class="bi bi-plug"></i> App key: <?php echo $appKeySet ? '<span class="text-success">set</span>' : '<span class="text-danger">not set</span>'; ?></span>
-    <span class="text-muted">Both live in <code>.env</code> (<code>SIMU_LICENSE_KEY_PATH</code>, <code>SIMU_APP_KEY</code>).</span>
-    <?php if ($stats['last_approved_at']): ?>
-      <span class="text-muted">Last approved <?php echo date('Y-m-d H:i', strtotime($stats['last_approved_at'])); ?></span>
-    <?php endif; ?>
-  </div>
-</div>
-
 <!-- Pending requests: the queue -->
 <?php if ($pendingRows): ?>
 <div class="card mb-4 border-warning">
