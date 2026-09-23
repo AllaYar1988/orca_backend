@@ -92,16 +92,20 @@ current code reads changes.
 ```bash
 cd /home/sgkk4203/public_html/orca_backend
 git fetch origin
-for m in provisioning provisioning_simplify provision_history; do
+for m in provisioning provisioning_simplify provision_history provision_test provision_versions; do
   git show origin/main:database/migration_$m.sql > /tmp/$m.sql
   mysql -u <DB_USER> -p <DB_NAME> < /tmp/$m.sql
 done
 ```
 
-All three, in that order. The first builds the table; the second takes
+All five, in that order. The first builds the table; the second takes
 provisioning back off `companies`, because companies are CUSTOMERS and the
-vendor is a different thing; the third adds the record of every serial change.
-(Or paste each file into phpMyAdmin -> SQL.)
+vendor is a different thing; the third adds the record of every serial change;
+the fourth marks the reserved test serials (`is_test`); the fifth adds the
+hardware and bootloader versions beside `fw_version`. (Or paste each file into
+phpMyAdmin -> SQL.) The last two are plain `ALTER TABLE ... ADD COLUMN`: run
+on a database that already has them they stop with "Duplicate column name",
+which means they are done.
 
 Re-running any of them is safe - they are written to be.
 

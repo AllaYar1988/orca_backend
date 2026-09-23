@@ -298,10 +298,10 @@ class Provision {
     public function create(array $d) {
         $sql = "INSERT INTO {$this->table}
                 (company_id, uid, serial_number, is_test, grant_b64, issued_utc,
-                 tool, tool_version, fw_version, ip_address)
+                 tool, tool_version, fw_version, boot_version, hw_version, ip_address)
                 VALUES
                 (:company_id, :uid, :serial_number, :is_test, :grant_b64, :issued_utc,
-                 :tool, :tool_version, :fw_version, :ip_address)";
+                 :tool, :tool_version, :fw_version, :boot_version, :hw_version, :ip_address)";
         $stmt = $this->db->prepare($sql);
         $stmt->execute([
             ':company_id'    => $d['company_id'] ?? null,
@@ -313,28 +313,48 @@ class Provision {
             ':tool'          => $d['tool'] ?? null,
             ':tool_version'  => $d['tool_version'] ?? null,
             ':fw_version'    => $d['fw_version'] ?? null,
+            ':boot_version'  => $d['boot_version'] ?? null,
+            ':hw_version'    => $d['hw_version'] ?? null,
             ':ip_address'    => $d['ip_address'] ?? null,
         ]);
         return $this->db->lastInsertId();
     }
 
     /**
-     * The same chip asked again. Free - but counted, so a board that is
-     * re-provisioned forty times shows up.
+     * What the board ran and was, as of this call. Every path that ends on
+     * an existing row records it - a re-issue, a serial change, a chip
+     * replacement - because the board in hand is the truth and the row may
+     * be years old. A value the tool did not send is left as it was.
      */
-    public function markReissued($id, $tool = null, $toolVersion = null, $fwVersion = null) {
+    public function recordVersions($id, $toolVersion = null, $fwVersion = null,
+                                   $bootVersion = null, $hwVersion = null) {
         $sql = "UPDATE {$this->table}
-                SET reissue_count = reissue_count + 1,
-                    last_reissued_at = NOW(),
-                    tool = COALESCE(:tool, tool),
-                    tool_version = COALESCE(:tool_version, tool_version),
-                    fw_version = COALESCE(:fw_version, fw_version)
+                SET tool_version = COALESCE(:tool_version, tool_version),
+                    fw_version   = COALESCE(:fw_version, fw_version),
+                    boot_version = COALESCE(:boot_version, boot_version),
+                    hw_version   = COALESCE(:hw_version, hw_version)
                 WHERE id = :id";
         $stmt = $this->db->prepare($sql);
         $stmt->execute([
-            ':id' => $id, ':tool' => $tool,
-            ':tool_version' => $toolVersion, ':fw_version' => $fwVersion,
+            ':id' => $id, ':tool_version' => $toolVersion, ':fw_version' => $fwVersion,
+            ':boot_version' => $bootVersion, ':hw_version' => $hwVersion,
         ]);
+    }
+
+    /**
+     * The same chip asked again. Free - but counted, so a board that is
+     * re-provisioned forty times shows up.
+     */
+    public function markReissued($id, $tool = null, $toolVersion = null, $fwVersion = null,
+                                 $bootVersion = null, $hwVersion = null) {
+        $sql = "UPDATE {$this->table}
+                SET reissue_count = reissue_count + 1,
+                    last_reissued_at = NOW(),
+                    tool = COALESCE(:tool, tool)
+                WHERE id = :id";
+        $stmt = $this->db->prepare($sql);
+        $stmt->execute([':id' => $id, ':tool' => $tool]);
+        $this->recordVersions($id, $toolVersion, $fwVersion, $bootVersion, $hwVersion);
     }
 
     /**

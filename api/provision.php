@@ -14,7 +14,9 @@
  *   "replace":      false,                        optional - the serial is on another chip: move it here
  *   "tool":         "orca",                       optional, for the audit trail
  *   "tool_version": "1.4.0",
- *   "fw_version":   "V3.25.10"
+ *   "fw_version":   "V3.25.10",                   what the board runs, as Orca read it
+ *   "boot_version": "V1.1.37",                    its bootloader, as the firmware reports it
+ *   "hw_version":   "1.1"                         its board revision, as stored on it
  * }
  *
  * Response 201 (or 200 for a chip already known):
@@ -126,6 +128,8 @@ $replace     = !empty($data['replace']);     // "the serial is on another chip: 
 $tool        = substr(trim((string)($data['tool'] ?? '')), 0, 50) ?: null;
 $toolVersion = substr(trim((string)($data['tool_version'] ?? '')), 0, 50) ?: null;
 $fwVersion   = substr(trim((string)($data['fw_version'] ?? '')), 0, 50) ?: null;
+$bootVersion = substr(trim((string)($data['boot_version'] ?? '')), 0, 50) ?: null;
+$hwVersion   = substr(trim((string)($data['hw_version'] ?? '')), 0, 20) ?: null;
 $ip = $_SERVER['REMOTE_ADDR'] ?? null;
 
 if (!GrantSigner::isValidUid($uid)) {
@@ -187,6 +191,7 @@ try {
                 $db->rollBack();
                 provisionError($e->getMessage(), $e->apiCode, $e->http);
             }
+            $prov->recordVersions($moved['id'], $toolVersion, $fwVersion, $bootVersion, $hwVersion);
             $db->commit();
             $out = [
                 'success'       => true,
@@ -246,6 +251,7 @@ try {
             $issued = time();
             $grant  = $signer->signBase64($uid, $wantSerial, 0, $issued);
             $prov->changeSerial($existing['id'], $wantSerial, $grant, $issued, $tool, $ip);
+            $prov->recordVersions($existing['id'], $toolVersion, $fwVersion, $bootVersion, $hwVersion);
             $db->commit();
 
             jsonResponse([
@@ -268,7 +274,7 @@ try {
             provisionError('Stored grant does not verify against the current key', 'SIGNER', 500);
         }
 
-        $prov->markReissued($existing['id'], $tool, $toolVersion, $fwVersion);
+        $prov->markReissued($existing['id'], $tool, $toolVersion, $fwVersion, $bootVersion, $hwVersion);
         $db->commit();
 
         jsonResponse([
@@ -312,6 +318,8 @@ try {
         'tool'          => $tool,
         'tool_version'  => $toolVersion,
         'fw_version'    => $fwVersion,
+        'boot_version'  => $bootVersion,
+        'hw_version'    => $hwVersion,
         'ip_address'    => $ip,
     ]);
 

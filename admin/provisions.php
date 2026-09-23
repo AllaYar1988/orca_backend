@@ -333,6 +333,7 @@ include 'includes/header.php';
                         <th>UID</th>
                         <th>Issued</th>
                         <th>Tool</th>
+                        <th>Versions</th>
                         <th class="text-end">Re-issued</th>
                         <th>Grant</th>
                         <th></th>
@@ -340,7 +341,7 @@ include 'includes/header.php';
                 </thead>
                 <tbody>
                 <?php if (!$rows): ?>
-                    <tr><td colspan="8" class="text-center text-muted py-4">No grants match.</td></tr>
+                    <tr><td colspan="9" class="text-center text-muted py-4">No grants match.</td></tr>
                 <?php endif; ?>
                 <?php foreach ($rows as $r): ?>
                     <tr class="<?php echo $r['retired_at'] ? 'table-secondary text-muted' : ''; ?>">
@@ -359,7 +360,15 @@ include 'includes/header.php';
                         <td class="small"><?php echo date('Y-m-d H:i', strtotime($r['created_at'])); ?></td>
                         <td class="small text-muted">
                             <?php echo htmlspecialchars(trim(($r['tool'] ?? '') . ' ' . ($r['tool_version'] ?? ''))) ?: '—'; ?>
-                            <?php if ($r['fw_version']): ?><br>fw <?php echo htmlspecialchars($r['fw_version']); ?><?php endif; ?>
+                        </td>
+                        <td class="small text-muted font-monospace" title="As of provisioning: hardware revision, firmware, bootloader. The hardware never changes; the other two go stale after a firmware update.">
+                            <?php
+                              $v = [];
+                              if (!empty($r['hw_version']))   { $v[] = 'hw '   . htmlspecialchars($r['hw_version']); }
+                              if (!empty($r['fw_version']))   { $v[] = 'fw '   . htmlspecialchars($r['fw_version']); }
+                              if (!empty($r['boot_version'])) { $v[] = 'boot ' . htmlspecialchars($r['boot_version']); }
+                              echo $v ? implode('<br>', $v) : '—';
+                            ?>
                         </td>
                         <td class="text-end"><?php echo (int)$r['reissue_count']; ?></td>
                         <td>
