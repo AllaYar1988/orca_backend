@@ -260,6 +260,10 @@ $currentUser = getCurrentUser();
                 <i class="bi bi-key"></i>
                 Provisioning
             </a>
+            <a href="simu_licenses.php" class="nav-link <?php echo ($currentPage ?? '') === 'simu_licenses' ? 'active' : ''; ?>">
+                <i class="bi bi-pc-display"></i>
+                Simu Licences
+            </a>
 
             <div class="nav-section">Users</div>
             <a href="user_create.php" class="nav-link <?php echo ($currentPage ?? '') === 'user_create' ? 'active' : ''; ?>">
