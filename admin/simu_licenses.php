@@ -448,8 +448,7 @@ include 'includes/header.php';
         <div class="form-text mt-2">
             For a PC with no internet. The customer reads the Machine ID off Simu's activation page ("No internet on this PC?")
             and emails it; you issue here, download <code>license.json</code> from the message that follows, and email it back.
-            They upload it on the same page, or copy it next to <code>Simu.exe</code>. One row per PC either way - a Machine ID
-            that already has a row is refused here; find it below instead.
+            They upload it on the same page, or copy it next to <code>Simu.exe</code>.
         </div>
     </div>
 </div>
@@ -554,7 +553,7 @@ include 'includes/header.php';
     <div class="card-footer text-muted small">
         One row per PC, for ever: Simu asking again returns the same row, and the same signed document once there is one.
         A new motherboard or a reinstalled Windows is a new Machine ID and turns up as a new request - approve it and disable
-        the old row. Every decision is kept in <code>simu_license_history</code>.
+        the old row.
     </div>
 </div>
 
